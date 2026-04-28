@@ -227,8 +227,9 @@ function parseFilters(params: URLSearchParams): ReportFilters {
     dateField: parseDateField(params.get("dateField")),
     account: cleanAll(params.get("account")),
     reportingType: parseReportingType(params.get("reportingType")),
-    accountingCategory: cleanAll(params.get("accountingCategory")),
-    programCategory: cleanAll(params.get("programCategory")),
+    accountingCategory: cleanAllMany(params.getAll("accountingCategory")),
+    programCategory: cleanAllMany(params.getAll("programCategory")),
+    includeUncategorized: parseCheckbox(params.get("includeUncategorized")),
   };
 }
 
@@ -248,6 +249,15 @@ function parseDateField(value: string | null): ReportDateField | undefined {
 
 function cleanAll(value: string | null) {
   return value && value !== "all" ? value : undefined;
+}
+
+function cleanAllMany(values: string[]) {
+  const cleaned = values.map((value) => value.trim()).filter((value) => value && value !== "all");
+  return cleaned.length ? cleaned : undefined;
+}
+
+function parseCheckbox(value: string | null) {
+  return value === "1" || value === "true" || value === "on";
 }
 
 function parseReportingType(value: string | null): CategoryType | "all" | undefined {

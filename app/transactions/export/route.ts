@@ -12,8 +12,8 @@ export function GET(request: NextRequest) {
     dateField: params.get("dateField") === "transaction_date" ? "transaction_date" : "clear_date",
     account: cleanAll(params.get("account")),
     reportingType: parseReportingType(params.get("reportingType")),
-    accountingCategory: cleanAll(params.get("accountingCategory")),
-    programCategory: cleanAll(params.get("programCategory")),
+    accountingCategory: cleanAllMany(params.getAll("accountingCategory")),
+    programCategory: cleanAllMany(params.getAll("programCategory")),
     sort: parseSort(params.get("sort")),
     sortDir: params.get("sortDir") === "asc" ? "asc" : "desc",
   });
@@ -90,6 +90,11 @@ function csvCell(value: unknown) {
 
 function cleanAll(value: string | null) {
   return value && value !== "all" ? value : undefined;
+}
+
+function cleanAllMany(values: string[]) {
+  const cleaned = values.map((value) => value.trim()).filter((value) => value && value !== "all");
+  return cleaned.length ? cleaned : undefined;
 }
 
 function parseReportingType(value: string | null): CategoryType | "all" | undefined {

@@ -126,28 +126,22 @@ SELECT
   CASE
     WHEN COALESCE(accounting_rule.category_type, 'unknown') = 'revenue'
      AND COALESCE(accounts.account_type, 'other') != 'credit_card'
-      THEN ABS(t.net_cents)
+      THEN t.net_cents
     ELSE 0
   END AS revenue_cents,
   CASE
     WHEN COALESCE(accounting_rule.category_type, 'unknown') = 'expenditure'
-      THEN ABS(t.net_cents)
+      THEN -t.net_cents
     ELSE 0
   END AS expenditure_cents,
-  (
-    CASE
-      WHEN COALESCE(accounting_rule.category_type, 'unknown') = 'revenue'
-       AND COALESCE(accounts.account_type, 'other') != 'credit_card'
-        THEN ABS(t.net_cents)
-      ELSE 0
-    END
-    -
-    CASE
-      WHEN COALESCE(accounting_rule.category_type, 'unknown') = 'expenditure'
-        THEN ABS(t.net_cents)
-      ELSE 0
-    END
-  ) AS normalized_net_cents
+  CASE
+    WHEN COALESCE(accounting_rule.category_type, 'unknown') = 'revenue'
+     AND COALESCE(accounts.account_type, 'other') != 'credit_card'
+      THEN t.net_cents
+    WHEN COALESCE(accounting_rule.category_type, 'unknown') = 'expenditure'
+      THEN t.net_cents
+    ELSE 0
+  END AS normalized_net_cents
 FROM transactions t
 LEFT JOIN accounts
   ON accounts.sheet_name = t.source_sheet

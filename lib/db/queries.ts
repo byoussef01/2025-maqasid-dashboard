@@ -265,8 +265,8 @@ export type TransactionPageFilters = {
   dateField?: "clear_date" | "transaction_date";
   account?: string;
   reportingType?: CategoryType | "all";
-  accountingCategory?: string;
-  programCategory?: string;
+  accountingCategory?: string[];
+  programCategory?: string[];
   sort?: TransactionSort;
   sortDir?: SortDirection;
   limit?: number;
@@ -387,23 +387,29 @@ export function getTransactionFilterOptions() {
     accountingCategories: (
       db
         .prepare(
-          `SELECT DISTINCT accounting_category as value
-           FROM transactions
+          `SELECT
+             accounting_category as value,
+             MAX(COALESCE(accounting_category_label, '')) as label
+           FROM normalized_transactions
            WHERE accounting_category IS NOT NULL AND accounting_category != ''
+           GROUP BY accounting_category
            ORDER BY accounting_category ASC`,
         )
-        .all() as { value: string }[]
-    ).map((row) => row.value),
+        .all() as { value: string; label: string }[]
+    ),
     programCategories: (
       db
         .prepare(
-          `SELECT DISTINCT program_category as value
-           FROM transactions
+          `SELECT
+             program_category as value,
+             MAX(COALESCE(program_category_label, '')) as label
+           FROM normalized_transactions
            WHERE program_category IS NOT NULL AND program_category != ''
+           GROUP BY program_category
            ORDER BY program_category ASC`,
         )
-        .all() as { value: string }[]
-    ).map((row) => row.value),
+        .all() as { value: string; label: string }[]
+    ),
   };
 }
 
@@ -447,20 +453,50 @@ function transactionWhere(filters: TransactionPageFilters) {
     params.reportingType = filters.reportingType;
   }
 
-  if (filters.accountingCategory) {
-    clauses.push("accounting_category = @accountingCategory");
-    params.accountingCategory = filters.accountingCategory;
-  }
-
-  if (filters.programCategory) {
-    clauses.push("program_category = @programCategory");
-    params.programCategory = filters.programCategory;
-  }
+  addMultiValueClause(
+    clauses,
+    params,
+    "accounting_category",
+    "accountingCategory",
+    filters.accountingCategory,
+  );
+  addMultiValueClause(
+    clauses,
+    params,
+    "program_category",
+    "programCategory",
+    filters.programCategory,
+  );
 
   return {
     whereSql: clauses.length ? `WHERE ${clauses.join(" AND ")}` : "",
     params,
   };
+}
+
+function addMultiValueClause(
+  clauses: string[],
+  params: Record<string, string | number>,
+  column: string,
+  paramPrefix: string,
+  values?: string[],
+) {
+  if (!values?.length) {
+    return;
+  }
+
+  const uniqueValues = [...new Set(values.map((value) => value.trim()).filter(Boolean))];
+  if (!uniqueValues.length) {
+    return;
+  }
+
+  const placeholders = uniqueValues.map((value, index) => {
+    const key = `${paramPrefix}${index}`;
+    params[key] = value;
+    return `@${key}`;
+  });
+
+  clauses.push(`${column} IN (${placeholders.join(", ")})`);
 }
 
 function transactionOrderBy(sort: TransactionSort = "clear_date", sortDir: SortDirection = "desc") {

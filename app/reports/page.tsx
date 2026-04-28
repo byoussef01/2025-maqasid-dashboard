@@ -41,25 +41,27 @@ const REPORTING_TYPES: CategoryType[] = [
 ];
 
 type SearchParams = Promise<{
-  startDate?: string;
-  endDate?: string;
-  dateField?: ReportDateField;
-  account?: string;
-  reportingType?: CategoryType | "all";
-  accountingCategory?: string;
-  programCategory?: string;
+  startDate?: string | string[];
+  endDate?: string | string[];
+  dateField?: string | string[];
+  account?: string | string[];
+  reportingType?: string | string[];
+  accountingCategory?: string | string[];
+  programCategory?: string | string[];
+  includeUncategorized?: string | string[];
 }>;
 
 export default async function ReportsPage({ searchParams }: { searchParams: SearchParams }) {
   const params = await searchParams;
   const filters: ReportFilters = {
-    startDate: params.startDate || DEFAULT_START_DATE,
-    endDate: params.endDate || DEFAULT_END_DATE,
-    dateField: parseDateField(params.dateField),
-    account: cleanAll(params.account),
-    reportingType: parseReportingType(params.reportingType),
-    accountingCategory: cleanAll(params.accountingCategory),
-    programCategory: cleanAll(params.programCategory),
+    startDate: firstParam(params.startDate) || DEFAULT_START_DATE,
+    endDate: firstParam(params.endDate) || DEFAULT_END_DATE,
+    dateField: parseDateField(firstParam(params.dateField)),
+    account: cleanAll(firstParam(params.account)),
+    reportingType: parseReportingType(firstParam(params.reportingType)),
+    accountingCategory: cleanAllMany(params.accountingCategory),
+    programCategory: cleanAllMany(params.programCategory),
+    includeUncategorized: parseCheckbox(firstParam(params.includeUncategorized)),
   };
   const options = getTransactionFilterOptions();
   const summary = getSummaryReport(filters);
@@ -99,7 +101,7 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
                 <option value="clear_date">Clear Date</option>
                 <option value="transaction_date">Transaction Date</option>
               </Select>
-              <Select name="account" defaultValue={params.account || "all"}>
+              <Select name="account" defaultValue={firstParam(params.account) || "all"}>
                 <option value="all">All accounts</option>
                 {options.accounts.map((account) => (
                   <option key={account.value} value={account.value}>
@@ -107,7 +109,7 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
                   </option>
                 ))}
               </Select>
-              <Select name="reportingType" defaultValue={params.reportingType || "all"}>
+              <Select name="reportingType" defaultValue={firstParam(params.reportingType) || "all"}>
                 <option value="all">All reporting types</option>
                 {REPORTING_TYPES.map((type) => (
                   <option key={type} value={type}>
@@ -115,23 +117,38 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
                   </option>
                 ))}
               </Select>
-              <Select name="accountingCategory" defaultValue={params.accountingCategory || "all"}>
-                <option value="all">All accounting categories</option>
-                {options.accountingCategories.map((category) => (
-                  <option key={category} value={category}>
-                    {category}
-                  </option>
-                ))}
-              </Select>
-              <Select name="programCategory" defaultValue={params.programCategory || "all"}>
-                <option value="all">All program categories</option>
-                {options.programCategories.map((category) => (
-                  <option key={category} value={category}>
-                    {category}
-                  </option>
-                ))}
-              </Select>
-              <div className="flex gap-2 lg:col-span-5">
+              <ChecklistPicker
+                label="Accounting Categories"
+                name="accountingCategory"
+                options={options.accountingCategories}
+                selectedValues={filters.accountingCategory}
+                placeholder="All accounting categories"
+                className="lg:col-span-3"
+              />
+              <ChecklistPicker
+                label="Program Categories"
+                name="programCategory"
+                options={options.programCategories}
+                selectedValues={filters.programCategory}
+                placeholder="All program categories"
+                className="lg:col-span-3"
+              />
+              <label className="border-input bg-background flex items-start gap-3 rounded-md border p-3 text-sm lg:col-span-6">
+                <input
+                  type="checkbox"
+                  name="includeUncategorized"
+                  value="1"
+                  defaultChecked={filters.includeUncategorized}
+                  className="mt-0.5 size-4 rounded border-input"
+                />
+                <span className="flex min-w-0 flex-col gap-1">
+                  <span className="font-medium">Include uncategorized in revenue and expenditure</span>
+                  <span className="text-xs text-muted-foreground">
+                    Unknown rows stay listed separately, but their signed amounts are folded into report totals when this is checked.
+                  </span>
+                </span>
+              </label>
+              <div className="flex gap-2 lg:col-span-6">
                 <Button type="submit" variant="outline">
                   Apply
                 </Button>
@@ -346,12 +363,23 @@ function CategoryLabel({
 
 function Select({
   children,
+  className,
+  multiple,
   ...props
 }: React.SelectHTMLAttributes<HTMLSelectElement>) {
+  const classes = [
+    "border-input bg-background rounded-md border px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50",
+    multiple ? "min-h-32 py-2" : "h-9",
+    className,
+  ]
+    .filter(Boolean)
+    .join(" ");
+
   return (
     <select
       {...props}
-      className="border-input bg-background h-9 rounded-md border px-3 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50"
+      multiple={multiple}
+      className={classes}
     >
       {children}
     </select>
@@ -362,23 +390,119 @@ function parseDateField(value?: string): ReportDateField {
   return value === "transaction_date" || value === "clear_date" ? value : DEFAULT_DATE_FIELD;
 }
 
+type CategoryOption = {
+  value: string;
+  label: string;
+};
+
+function ChecklistPicker({
+  label,
+  name,
+  options,
+  selectedValues,
+  placeholder,
+  className,
+}: {
+  label: string;
+  name: string;
+  options: CategoryOption[];
+  selectedValues?: string[];
+  placeholder: string;
+  className?: string;
+}) {
+  const selected = new Set(selectedValues ?? []);
+  const selectedOptions = options.filter((option) => selected.has(option.value));
+  const summaryLabel =
+    selectedOptions.length === 0
+      ? placeholder
+      : selectedOptions.length === 1
+        ? formatCategoryOption(selectedOptions[0])
+        : `${selectedOptions.length} selected`;
+  const summaryMeta =
+    selectedOptions.length === 0
+      ? "All categories"
+      : selectedOptions.length === 1
+        ? "1 selected"
+        : `${selectedOptions.length} selected`;
+
+  return (
+    <div className={className}>
+      <label className="mb-1 block text-xs text-muted-foreground">{label}</label>
+      <details className="relative">
+        <summary className="border-input bg-background flex min-h-9 cursor-pointer list-none items-center justify-between gap-3 rounded-md border px-3 py-2 text-sm shadow-xs outline-none focus-visible:border-ring focus-visible:ring-[3px] focus-visible:ring-ring/50">
+          <span className={selectedOptions.length === 0 ? "text-muted-foreground" : undefined}>
+            {summaryLabel}
+          </span>
+          <span className="shrink-0 text-xs text-muted-foreground">{summaryMeta}</span>
+        </summary>
+        <div className="bg-background absolute z-20 mt-2 w-full rounded-md border p-2 shadow-lg">
+          <p className="px-2 pb-2 text-xs text-muted-foreground">
+            Leave every box unchecked to include all categories.
+          </p>
+          <div className="max-h-72 space-y-1 overflow-auto">
+            {options.map((option) => (
+              <label
+                key={`${name}-${option.value}`}
+                className="hover:bg-muted/50 flex cursor-pointer items-start gap-3 rounded-md px-2 py-2"
+              >
+                <input
+                  type="checkbox"
+                  name={name}
+                  value={option.value}
+                  defaultChecked={selected.has(option.value)}
+                  className="mt-0.5 size-4 rounded border-input"
+                />
+                <span className="flex min-w-0 flex-col gap-1">
+                  <span className="font-medium">{option.value}</span>
+                  {option.label ? (
+                    <span className="break-words text-xs text-muted-foreground">{option.label}</span>
+                  ) : null}
+                </span>
+              </label>
+            ))}
+          </div>
+        </div>
+      </details>
+    </div>
+  );
+}
+
+function firstParam(value?: string | string[]) {
+  return Array.isArray(value) ? value[0] : value;
+}
+
 function cleanAll(value?: string) {
   return value && value !== "all" ? value : undefined;
+}
+
+function cleanAllMany(value?: string | string[]) {
+  const values = Array.isArray(value) ? value : value ? [value] : [];
+  const cleaned = values.map((entry) => entry.trim()).filter((entry) => entry && entry !== "all");
+  return cleaned.length ? cleaned : undefined;
+}
+
+function parseCheckbox(value?: string) {
+  return value === "1" || value === "true" || value === "on";
 }
 
 function parseReportingType(value?: string): CategoryType | "all" | undefined {
   return REPORTING_TYPES.includes(value as CategoryType) ? (value as CategoryType) : undefined;
 }
 
+function formatCategoryOption(category: { value: string; label: string }) {
+  return category.label ? `${category.value} - ${category.label}` : category.value;
+}
+
 function toSearchParams(
-  params: Record<string, string | undefined>,
-  overrides: Record<string, string | undefined> = {},
+  params: Record<string, string | string[] | undefined>,
+  overrides: Record<string, string | string[] | undefined> = {},
 ) {
   const next = new URLSearchParams();
 
   for (const [key, value] of Object.entries({ ...params, ...overrides })) {
-    if (value && value !== "all") {
-      next.set(key, value);
+    const values = Array.isArray(value) ? value : value ? [value] : [];
+    for (const entry of values.map((item) => item.trim()).filter((item) => item && item !== "all")) {
+      next.append(key, entry);
     }
   }
 
