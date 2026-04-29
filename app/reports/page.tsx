@@ -173,14 +173,14 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
           </CardContent>
         </Card>
 
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-5">
-          <StatCard label="Total Revenue" value={formatCurrency(summary.revenueCents)} />
+        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+          <StatCard
+            label="Total Revenue"
+            value={formatCurrency(summary.revenueCents)}
+            detail={`${formatInteger(summary.transactionCount)} transactions`}
+          />
           <StatCard label="Total Expenditure" value={formatCurrency(summary.expenditureCents)} />
           <StatCard label="Net" value={formatCurrency(summary.normalizedNetCents)} />
-          <StatCard
-            label="Transactions"
-            value={formatInteger(summary.transactionCount)}
-          />
           <StatCard
             label="Unknown Transactions"
             value={formatInteger(summary.unknownTransactionCount)}
