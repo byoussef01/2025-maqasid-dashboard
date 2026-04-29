@@ -1,3 +1,5 @@
+import { FilterSubmitButton } from "@/components/filter-submit-button";
+import { GetForm } from "@/components/get-form";
 import Link from "next/link";
 import type * as React from "react";
 
@@ -21,17 +23,21 @@ import {
   getByCategoryReport,
   getExceptionsReport,
   getSummaryReport,
+  getSummaryBucketReport,
+  getSummaryBucketSections,
   type ReportDateField,
   type ReportFilters,
+  type SortDirection,
+  type SummaryBucketSort,
 } from "@/lib/reports/classification";
 import { formatCurrency, formatInteger } from "@/lib/reports/format";
 import type { CategoryType } from "@/lib/types/finance";
 
 export const dynamic = "force-dynamic";
 
-const DEFAULT_START_DATE = "2025-09-01";
-const DEFAULT_END_DATE = "2025-12-01";
-const DEFAULT_DATE_FIELD: ReportDateField = "clear_date";
+const DEFAULT_START_DATE = "2025-01-01";
+const DEFAULT_END_DATE = "2025-12-31";
+const DEFAULT_DATE_FIELD: ReportDateField = "workbook_month";
 const REPORTING_TYPES: CategoryType[] = [
   "revenue",
   "expenditure",
@@ -49,6 +55,10 @@ type SearchParams = Promise<{
   accountingCategory?: string | string[];
   programCategory?: string | string[];
   includeUncategorized?: string | string[];
+  summaryBucketSort?: string | string[];
+  summaryBucketSortDir?: string | string[];
+  summaryBucketSection?: string | string[];
+  showEmptyBuckets?: string | string[];
 }>;
 
 export default async function ReportsPage({ searchParams }: { searchParams: SearchParams }) {
@@ -62,12 +72,20 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
     accountingCategory: cleanAllMany(params.accountingCategory),
     programCategory: cleanAllMany(params.programCategory),
     includeUncategorized: parseCheckbox(firstParam(params.includeUncategorized)),
+    summaryBucketSort: parseSummaryBucketSort(firstParam(params.summaryBucketSort)),
+    summaryBucketSortDir: parseSortDirection(firstParam(params.summaryBucketSortDir)),
+    summaryBucketSection: cleanAll(firstParam(params.summaryBucketSection)),
+    showEmptyBuckets: parseCheckbox(firstParam(params.showEmptyBuckets)),
   };
-  const options = getTransactionFilterOptions();
-  const summary = getSummaryReport(filters);
-  const accounts = getByAccountReport(filters);
-  const categories = getByCategoryReport(filters);
-  const exceptions = getExceptionsReport(filters);
+  const [options, summary, accounts, categories, summaryBuckets, bucketSections, exceptions] = await Promise.all([
+    getTransactionFilterOptions(),
+    getSummaryReport(filters),
+    getByAccountReport(filters),
+    getByCategoryReport(filters),
+    getSummaryBucketReport(filters),
+    getSummaryBucketSections(),
+    getExceptionsReport(filters),
+  ]);
 
   return (
     <PageShell>
@@ -75,31 +93,29 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
         <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
           <div>
             <h1 className="text-2xl font-semibold tracking-normal">Reports</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Exportable reporting views from normalized SQLite transactions.
-            </p>
           </div>
           <div className="flex flex-wrap gap-2">
-            <ExportButton report="normalized" label="normalized_transactions.csv" params={params} />
-            <ExportButton report="summary" label="summary_report.csv" params={params} />
-            <ExportButton report="accounts" label="by_account_report.csv" params={params} />
-            <ExportButton report="categories" label="by_category_report.csv" params={params} />
-            <ExportButton report="exceptions" label="exceptions.csv" params={params} />
+            <ExportButton report="normalized" label="Export Transactions" params={params} />
+            <ExportButton report="summary" label="Export Summary" params={params} />
+            <ExportButton report="accounts" label="Export Accounts" params={params} />
+            <ExportButton report="categories" label="Export Categories" params={params} />
+            <ExportButton report="summary-buckets" label="Export Buckets" params={params} />
+            <ExportButton report="exceptions" label="Export Exceptions" params={params} />
           </div>
         </header>
 
         <Card>
           <CardHeader>
             <CardTitle>Filters</CardTitle>
-            <CardDescription>CSV exports use the same selected date range and filters.</CardDescription>
           </CardHeader>
           <CardContent>
-            <form className="grid gap-3 lg:grid-cols-6">
+            <GetForm className="grid gap-3 lg:grid-cols-6">
               <Input name="startDate" type="date" defaultValue={filters.startDate} />
               <Input name="endDate" type="date" defaultValue={filters.endDate} />
               <Select name="dateField" defaultValue={filters.dateField}>
                 <option value="clear_date">Clear Date</option>
                 <option value="transaction_date">Transaction Date</option>
+                <option value="workbook_month">Workbook Month</option>
               </Select>
               <Select name="account" defaultValue={firstParam(params.account) || "all"}>
                 <option value="all">All accounts</option>
@@ -142,21 +158,21 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
                   className="mt-0.5 size-4 rounded border-input"
                 />
                 <span className="flex min-w-0 flex-col gap-1">
-                  <span className="font-medium">Include uncategorized in revenue and expenditure</span>
+                  <span className="font-medium">Include unknown / uncategorized in totals</span>
                   <span className="text-xs text-muted-foreground">
-                    Unknown rows stay listed separately, but their signed amounts are folded into report totals when this is checked.
+                    Workbook-mapped unknown buckets like ? are already reflected in totals.
+                    Check this to also fold in remaining unknown rows that do not have workbook
+                    bucket mappings.
                   </span>
                 </span>
               </label>
               <div className="flex gap-2 lg:col-span-6">
-                <Button type="submit" variant="outline">
-                  Apply
-                </Button>
+                <FilterSubmitButton idleLabel="Apply" pendingLabel="Applying..." />
                 <Button asChild variant="ghost">
                   <Link href="/reports">Reset</Link>
                 </Button>
               </div>
-            </form>
+            </GetForm>
           </CardContent>
         </Card>
 
@@ -174,6 +190,119 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
             detail={formatCurrency(summary.unknownCents)}
           />
         </section>
+
+        <ReportCard
+          title="Summary Buckets"
+          description="Grouped rollups for major reporting areas."
+        >
+          <GetForm action="/reports" className="mb-4 flex flex-col gap-3">
+            <input type="hidden" name="startDate" value={filters.startDate} />
+            <input type="hidden" name="endDate" value={filters.endDate} />
+            <input type="hidden" name="dateField" value={filters.dateField} />
+            <input type="hidden" name="account" value={firstParam(params.account) || "all"} />
+            <input
+              type="hidden"
+              name="reportingType"
+              value={firstParam(params.reportingType) || "all"}
+            />
+            {(filters.accountingCategory ?? []).map((value) => (
+              <input key={`bucket-accounting-${value}`} type="hidden" name="accountingCategory" value={value} />
+            ))}
+            {(filters.programCategory ?? []).map((value) => (
+              <input key={`bucket-program-${value}`} type="hidden" name="programCategory" value={value} />
+            ))}
+            {filters.includeUncategorized ? (
+              <input type="hidden" name="includeUncategorized" value="1" />
+            ) : null}
+            <div className="grid gap-3 lg:grid-cols-4">
+              <div className="flex min-w-[14rem] flex-col gap-2">
+                <label className="text-sm font-medium">Bucket Group</label>
+                <Select
+                  name="summaryBucketSection"
+                  defaultValue={filters.summaryBucketSection ?? "all"}
+                >
+                  <option value="all">All groups</option>
+                  {bucketSections.map((section) => (
+                    <option key={section.sectionName} value={section.sectionName}>
+                      {section.sectionName}
+                    </option>
+                  ))}
+                </Select>
+              </div>
+              <div className="flex min-w-[14rem] flex-col gap-2">
+                <label className="text-sm font-medium">Bucket Sort</label>
+                <Select
+                  name="summaryBucketSort"
+                  defaultValue={filters.summaryBucketSort ?? "type"}
+                >
+                  <option value="type">Sort by type</option>
+                  <option value="section">Sort by section</option>
+                  <option value="bucket">Sort by bucket</option>
+                  <option value="transactions">Sort by transactions</option>
+                  <option value="total">Sort by total</option>
+                </Select>
+              </div>
+              <div className="flex min-w-[12rem] flex-col gap-2">
+                <label className="text-sm font-medium">Direction</label>
+                <Select
+                  name="summaryBucketSortDir"
+                  defaultValue={filters.summaryBucketSortDir ?? "asc"}
+                >
+                  <option value="asc">Ascending</option>
+                  <option value="desc">Descending</option>
+                </Select>
+              </div>
+              <div className="flex flex-col gap-2">
+                <label className="text-sm font-medium">Visibility</label>
+                <label className="border-input bg-background flex h-9 items-center gap-2 rounded-md border px-3 text-sm">
+                  <input
+                    type="checkbox"
+                    name="showEmptyBuckets"
+                    value="1"
+                    defaultChecked={filters.showEmptyBuckets}
+                    className="size-4 rounded border-input"
+                  />
+                  <span className="font-medium">Show if empty</span>
+                </label>
+              </div>
+            </div>
+            <div>
+              <FilterSubmitButton
+                idleLabel="Apply Bucket View"
+                pendingLabel="Updating Buckets..."
+                size="sm"
+              />
+            </div>
+          </GetForm>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Section</TableHead>
+                <TableHead>Bucket</TableHead>
+                <TableHead>Type</TableHead>
+                <TableHead className="text-right">Transactions</TableHead>
+                <TableHead className="text-right">Total</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {summaryBuckets.length === 0 ? (
+                <EmptyRow colSpan={5} />
+              ) : (
+                summaryBuckets.map((row) => (
+                  <TableRow key={`${row.bucketKey}-${row.sourceCell}`}>
+                    <TableCell className="font-medium">{row.sectionName}</TableCell>
+                    <TableCell>{row.bucketName}</TableCell>
+                    <TableCell>
+                      <Badge variant="outline">{row.reportType}</Badge>
+                    </TableCell>
+                    <TableCell className="text-right">{formatInteger(row.transactionCount)}</TableCell>
+                    <TableCell className="text-right font-medium">{formatCurrency(row.totalCents)}</TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </ReportCard>
 
         <section className="grid gap-4 xl:grid-cols-2">
           <ReportCard title="By Account Report" description="Revenue and expenditure by account.">
@@ -387,7 +516,23 @@ function Select({
 }
 
 function parseDateField(value?: string): ReportDateField {
-  return value === "transaction_date" || value === "clear_date" ? value : DEFAULT_DATE_FIELD;
+  return value === "transaction_date" || value === "clear_date" || value === "workbook_month"
+    ? value
+    : DEFAULT_DATE_FIELD;
+}
+
+function parseSummaryBucketSort(value?: string): SummaryBucketSort {
+  return value === "section" ||
+    value === "bucket" ||
+    value === "type" ||
+    value === "transactions" ||
+    value === "total"
+    ? value
+    : "type";
+}
+
+function parseSortDirection(value?: string): SortDirection {
+  return value === "desc" ? "desc" : "asc";
 }
 
 type CategoryOption = {

@@ -33,13 +33,15 @@ export async function importWorkbookAction(
 
   const tempDir = path.join(process.cwd(), "data", "tmp-imports");
   const tempPath = path.join(tempDir, `${randomUUID()}-${safeFileName(file.name)}`);
+  const latestImportPath = path.join(process.cwd(), "data", "latest-import.xlsx");
   const keepTempFile = process.env.FINANCE_IMPORT_DEBUG === "1";
 
   try {
     await fs.mkdir(tempDir, { recursive: true });
     await fs.writeFile(tempPath, Buffer.from(await file.arrayBuffer()));
+    await fs.copyFile(tempPath, latestImportPath);
 
-    const result = importWorkbook(tempPath, file.name);
+    const result = await importWorkbook(tempPath, file.name);
 
     revalidatePath("/dashboard");
     revalidatePath("/transactions");
@@ -82,7 +84,7 @@ function classifyImportError(error: unknown) {
     return `Workbook shape issue: ${message}`;
   }
 
-  if (/SQLITE|database|constraint/i.test(message)) {
+  if (/SQLITE|database|constraint|libsql|turso/i.test(message)) {
     return `Database error: ${message}`;
   }
 

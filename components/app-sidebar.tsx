@@ -1,5 +1,6 @@
 "use client";
 
+import { UserButton } from "@clerk/nextjs";
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import {
@@ -26,9 +27,18 @@ export function AppSidebar() {
 
   return (
     <aside className="flex min-h-dvh w-full flex-col border-r bg-card px-3 py-4 md:w-64">
-      <div className="px-2">
-        <p className="text-sm font-semibold tracking-normal">Al-Maqasid Finance</p>
-        <p className="mt-1 text-xs text-muted-foreground">Local workbook dashboard</p>
+      <div className="flex items-start justify-between gap-3 px-2">
+        <div>
+          <p className="text-sm font-semibold tracking-normal">Al-Maqasid Finance</p>
+          <p className="mt-1 text-xs text-muted-foreground">Internal finance dashboard</p>
+        </div>
+        <UserButton
+          appearance={{
+            elements: {
+              userButtonAvatarBox: "size-8",
+            },
+          }}
+        />
       </div>
       <Separator className="my-4" />
       <nav className="flex flex-col gap-1">
@@ -53,7 +63,7 @@ export function AppSidebar() {
         })}
       </nav>
       <div className="mt-auto rounded-md bg-muted p-3 text-xs leading-5 text-muted-foreground">
-        Data stays on this machine in a local SQLite database.
+        Access is limited to approved Clerk users and protected routes.
       </div>
     </aside>
   );

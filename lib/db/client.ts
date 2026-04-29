@@ -1,31 +1,78 @@
-import Database from "better-sqlite3";
-import fs from "node:fs";
-import path from "node:path";
+import "server-only";
 
-import { initializeDatabase } from "./schema";
+import {
+  createClient,
+  type Client,
+  type InArgs,
+  type InStatement,
+  type ResultSet,
+  type Transaction,
+} from "@libsql/client";
 
-const dbDir = path.join(process.cwd(), "data");
-const dbPath = process.env.FINANCE_DB_PATH ?? path.join(dbDir, "finance.sqlite");
+import { getMaskedTursoHost, getTursoConfig } from "./turso-config";
 
-let db: Database.Database | undefined;
+let db: Client | undefined;
 
 export function getDb() {
   if (!db) {
-    fs.mkdirSync(dbDir, { recursive: true });
-    db = new Database(dbPath);
-    initializeDatabase(db);
+    const { url, authToken } = getTursoConfig();
+    db = createClient({ url, authToken });
   }
 
   return db;
 }
 
-export function openDatabase(filePath = dbPath) {
-  fs.mkdirSync(path.dirname(filePath), { recursive: true });
-  const database = new Database(filePath);
-  initializeDatabase(database);
-  return database;
+export async function dbExecute(statement: InStatement | string, args?: InArgs) {
+  return typeof statement === "string"
+    ? getDb().execute(statement, args)
+    : getDb().execute(statement);
 }
 
-export function getDbPath() {
-  return dbPath;
+export async function dbExecuteMultiple(sql: string) {
+  return getDb().executeMultiple(sql);
+}
+
+export async function dbAll<T>(sql: string, args?: InArgs) {
+  const result = await getDb().execute({ sql, args: args ?? {} });
+  return result.rows as unknown as T[];
+}
+
+export async function dbOne<T>(sql: string, args?: InArgs) {
+  const rows = await dbAll<T>(sql, args);
+  return rows[0];
+}
+
+export async function withWriteTransaction<T>(callback: (transaction: Transaction) => Promise<T>) {
+  const transaction = await getDb().transaction("write");
+
+  try {
+    const result = await callback(transaction);
+    await transaction.commit();
+    return result;
+  } catch (error) {
+    await transaction.rollback();
+    throw error;
+  } finally {
+    transaction.close();
+  }
+}
+
+export async function txExecute(
+  transaction: Transaction,
+  statement: InStatement | string,
+  args?: InArgs,
+) {
+  return typeof statement === "string"
+    ? transaction.execute({ sql: statement, args: args ?? {} })
+    : transaction.execute(statement);
+}
+
+export function getMaskedDbHost() {
+  return getMaskedTursoHost();
+}
+
+export function scalarNumber(result: ResultSet | undefined, key: string) {
+  const row = result?.rows[0] as Record<string, unknown> | undefined;
+  const value = row?.[key];
+  return typeof value === "number" ? value : Number(value ?? 0);
 }

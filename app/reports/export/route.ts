@@ -6,18 +6,19 @@ import {
   getExceptionsReport,
   getNormalizedTransactionsReport,
   getSummaryReport,
+  getSummaryBucketReport,
   type ReportDateField,
   type ReportFilters,
 } from "@/lib/reports/classification";
 import type { CategoryType } from "@/lib/types/finance";
 
-type ReportName = "normalized" | "summary" | "accounts" | "categories" | "exceptions";
+type ReportName = "normalized" | "summary" | "accounts" | "categories" | "summary-buckets" | "exceptions";
 
-export function GET(request: NextRequest) {
+export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams;
   const report = parseReport(params.get("report"));
   const filters = parseFilters(params);
-  const { filename, headers, rows } = reportCsv(report, filters);
+  const { filename, headers, rows } = await reportCsv(report, filters);
   const body = [headers.join(","), ...rows.map((row) => row.map(csvCell).join(","))].join("\n");
 
   return new Response(body, {
@@ -28,10 +29,10 @@ export function GET(request: NextRequest) {
   });
 }
 
-function reportCsv(report: ReportName, filters: ReportFilters) {
+async function reportCsv(report: ReportName, filters: ReportFilters) {
   switch (report) {
     case "summary": {
-      const row = getSummaryReport(filters);
+      const row = await getSummaryReport(filters);
       return {
         filename: "summary_report.csv",
         headers: [
@@ -59,7 +60,7 @@ function reportCsv(report: ReportName, filters: ReportFilters) {
       };
     }
     case "accounts": {
-      const rows = getByAccountReport(filters);
+      const rows = await getByAccountReport(filters);
       return {
         filename: "by_account_report.csv",
         headers: [
@@ -85,7 +86,7 @@ function reportCsv(report: ReportName, filters: ReportFilters) {
       };
     }
     case "categories": {
-      const rows = getByCategoryReport(filters);
+      const rows = await getByCategoryReport(filters);
       return {
         filename: "by_category_report.csv",
         headers: [
@@ -110,8 +111,32 @@ function reportCsv(report: ReportName, filters: ReportFilters) {
         ]),
       };
     }
+    case "summary-buckets": {
+      const rows = await getSummaryBucketReport(filters);
+      return {
+        filename: "summary_buckets.csv",
+        headers: [
+          "section_name",
+          "bucket_name",
+          "report_type",
+          "source_cell",
+          "display_order",
+          "transaction_count",
+          "total_cents",
+        ],
+        rows: rows.map((row) => [
+          row.sectionName,
+          row.bucketName,
+          row.reportType,
+          row.sourceCell,
+          row.displayOrder,
+          row.transactionCount,
+          row.totalCents,
+        ]),
+      };
+    }
     case "exceptions": {
-      const rows = getExceptionsReport(filters);
+      const rows = await getExceptionsReport(filters);
       return {
         filename: "exceptions.csv",
         headers: [
@@ -156,7 +181,7 @@ function reportCsv(report: ReportName, filters: ReportFilters) {
     }
     case "normalized":
     default: {
-      const rows = getNormalizedTransactionsReport(filters);
+      const rows = await getNormalizedTransactionsReport(filters);
       return {
         filename: "normalized_transactions.csv",
         headers: [
@@ -230,11 +255,26 @@ function parseFilters(params: URLSearchParams): ReportFilters {
     accountingCategory: cleanAllMany(params.getAll("accountingCategory")),
     programCategory: cleanAllMany(params.getAll("programCategory")),
     includeUncategorized: parseCheckbox(params.get("includeUncategorized")),
+    summaryBucketSort: parseSummaryBucketSort(params.get("summaryBucketSort")),
+    summaryBucketSortDir: params.get("summaryBucketSortDir") === "desc" ? "desc" : "asc",
+    summaryBucketSection: cleanAll(params.get("summaryBucketSection")),
+    showEmptyBuckets: parseCheckbox(params.get("showEmptyBuckets")),
   };
 }
 
+function parseSummaryBucketSort(value: string | null) {
+  const valid = ["section", "bucket", "type", "transactions", "total"];
+  return valid.includes(value ?? "") ? (value as ReportFilters["summaryBucketSort"]) : undefined;
+}
+
 function parseReport(value: string | null): ReportName {
-  if (value === "summary" || value === "accounts" || value === "categories" || value === "exceptions") {
+  if (
+    value === "summary" ||
+    value === "accounts" ||
+    value === "categories" ||
+    value === "summary-buckets" ||
+    value === "exceptions"
+  ) {
     return value;
   }
 
@@ -242,7 +282,10 @@ function parseReport(value: string | null): ReportName {
 }
 
 function parseDateField(value: string | null): ReportDateField | undefined {
-  return value === "transaction_date" || value === "clear_date" || value === "created_at"
+  return value === "transaction_date" ||
+    value === "clear_date" ||
+    value === "created_at" ||
+    value === "workbook_month"
     ? value
     : undefined;
 }

@@ -6,8 +6,8 @@ import { getLatestImport } from "@/lib/db/queries";
 
 export const dynamic = "force-dynamic";
 
-export default function ImportPage() {
-  const latestImport = getLatestImport();
+export default async function ImportPage() {
+  const latestImport = await getLatestImport();
 
   return (
     <PageShell>
@@ -15,7 +15,7 @@ export default function ImportPage() {
         <header>
           <h1 className="text-2xl font-semibold tracking-normal">Import Workbook</h1>
           <p className="mt-1 text-sm text-muted-foreground">
-            Upload a Google Sheets .xlsx export to replace the local normalized ledger.
+            Upload a Google Sheets .xlsx export to replace the current normalized ledger.
           </p>
         </header>
 
@@ -23,7 +23,8 @@ export default function ImportPage() {
           <CardHeader>
             <CardTitle>Workbook file</CardTitle>
             <CardDescription>
-              Uploading a workbook replaces the existing imported rows in the local SQLite database.
+              Uploading a workbook nukes the current imported data in Turso and replaces it with the
+              new workbook data in one pass.
             </CardDescription>
           </CardHeader>
           <CardContent>
@@ -52,7 +53,7 @@ export default function ImportPage() {
             <p>
               {latestImport
                 ? `Last import: ${latestImport.fileName} at ${latestImport.importedAt}`
-                : "No workbook has been imported into the local database yet."}
+                : "No workbook has been imported into Turso yet."}
             </p>
           </CardContent>
         </Card>

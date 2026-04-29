@@ -3,9 +3,9 @@ import { NextRequest } from "next/server";
 import { getTransactionsForExport, type TransactionSort } from "@/lib/db/queries";
 import type { CategoryType } from "@/lib/types/finance";
 
-export function GET(request: NextRequest) {
+export async function GET(request: NextRequest) {
   const params = request.nextUrl.searchParams;
-  const transactions = getTransactionsForExport({
+  const transactions = await getTransactionsForExport({
     q: params.get("q") ?? undefined,
     startDate: params.get("startDate") ?? undefined,
     endDate: params.get("endDate") ?? undefined,

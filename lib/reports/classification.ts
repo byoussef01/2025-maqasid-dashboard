@@ -1,4 +1,4 @@
-import { getDb } from "@/lib/db/client";
+import { dbAll, dbOne } from "@/lib/db/client";
 import type { AccountType, CategoryType } from "@/lib/types/finance";
 
 export type ClassifiableTransaction = {
@@ -6,6 +6,8 @@ export type ClassifiableTransaction = {
   accounting_category?: string | null;
   netCents?: number | null;
   net_cents?: number | null;
+  grossCents?: number | null;
+  gross_cents?: number | null;
   reportingType?: CategoryType | null;
   reporting_type?: CategoryType | null;
   accountType?: AccountType | null;
@@ -28,7 +30,7 @@ export type NormalizedClassification = {
   normalizedNetCents: number;
 };
 
-export type ReportDateField = "transaction_date" | "clear_date" | "created_at";
+export type ReportDateField = "transaction_date" | "clear_date" | "created_at" | "workbook_month";
 
 export type ReportFilters = {
   startDate?: string;
@@ -39,7 +41,14 @@ export type ReportFilters = {
   accountingCategory?: string[];
   programCategory?: string[];
   includeUncategorized?: boolean;
+  summaryBucketSort?: SummaryBucketSort;
+  summaryBucketSortDir?: SortDirection;
+  summaryBucketSection?: string;
+  showEmptyBuckets?: boolean;
 };
+
+export type SummaryBucketSort = "section" | "bucket" | "type" | "transactions" | "total";
+export type SortDirection = "asc" | "desc";
 
 export function classifyTransaction(
   transaction: ClassifiableTransaction,
@@ -54,25 +63,39 @@ export function classifyTransaction(
     return "unknown";
   }
 
+  if (categoryCode === "?") {
+    return "unknown";
+  }
+
   return lookupCategoryType(categoryRules, categoryCode) ?? "unknown";
 }
 
 export function getNormalizedTransaction(
   transaction: ClassifiableTransaction,
 ): NormalizedClassification {
-  const reportingType =
-    transaction.reportingType ?? transaction.reporting_type ?? "unknown";
   const accountType = transaction.accountType ?? transaction.account_type ?? "other";
   const netCents = transaction.netCents ?? transaction.net_cents ?? 0;
+  const grossCents = transaction.grossCents ?? transaction.gross_cents ?? netCents;
+  const reportAmountCents = accountType === "credit_card" ? -grossCents : grossCents;
+  const categoryCode = normalizeCategoryCode(
+    transaction.accountingCategory ?? transaction.accounting_category,
+  );
+  const reportingType =
+    categoryCode === "?"
+      ? "unknown"
+      : (transaction.reportingType ?? transaction.reporting_type ?? "unknown");
 
   const revenueCents =
-    reportingType === "revenue" && accountType !== "credit_card" ? netCents : 0;
-  const expenditureCents = reportingType === "expenditure" ? -netCents : 0;
+    reportingType === "revenue" && accountType !== "credit_card" && reportAmountCents > 0
+      ? reportAmountCents
+      : 0;
+  const expenditureCents =
+    reportingType === "expenditure" && reportAmountCents < 0 ? -reportAmountCents : 0;
   const normalizedNetCents =
     reportingType === "revenue" && accountType !== "credit_card"
-      ? netCents
+      ? reportAmountCents
       : reportingType === "expenditure"
-        ? netCents
+        ? reportAmountCents
         : 0;
 
   return {
@@ -83,25 +106,11 @@ export function getNormalizedTransaction(
   };
 }
 
-export function getSummaryReport(filters: ReportFilters = {}) {
+export async function getSummaryReport(filters: ReportFilters = {}) {
   const { whereSql, params } = reportWhere(filters);
   const metrics = buildReportMetricSql(filters);
 
-  return getDb()
-    .prepare(
-      `SELECT
-        COUNT(*) as transactionCount,
-        COALESCE(SUM(CASE WHEN reporting_type = 'unknown' THEN 1 ELSE 0 END), 0) as unknownTransactionCount,
-        COALESCE(SUM(${metrics.revenueExpr}), 0) as revenueCents,
-        COALESCE(SUM(${metrics.expenditureExpr}), 0) as expenditureCents,
-        COALESCE(SUM(${metrics.normalizedNetExpr}), 0) as normalizedNetCents,
-        COALESCE(SUM(CASE WHEN reporting_type = 'transfer' THEN ABS(net_cents) ELSE 0 END), 0) as transferCents,
-        COALESCE(SUM(CASE WHEN reporting_type = 'ignored' THEN ABS(net_cents) ELSE 0 END), 0) as ignoredCents,
-        COALESCE(SUM(CASE WHEN reporting_type = 'unknown' THEN ABS(net_cents) ELSE 0 END), 0) as unknownCents
-       FROM normalized_transactions
-       ${whereSql}`,
-    )
-    .get(params) as {
+  return dbOne<{
     transactionCount: number;
     unknownTransactionCount: number;
     revenueCents: number;
@@ -110,30 +119,27 @@ export function getSummaryReport(filters: ReportFilters = {}) {
     transferCents: number;
     ignoredCents: number;
     unknownCents: number;
-  };
-}
-
-export function getByAccountReport(filters: ReportFilters = {}) {
-  const { whereSql, params } = reportWhere(filters);
-  const metrics = buildReportMetricSql(filters);
-
-  return getDb()
-    .prepare(
+  }>(
       `SELECT
-        account,
-        source_sheet as sourceSheet,
-        account_type as accountType,
         COUNT(*) as transactionCount,
+        COALESCE(SUM(CASE WHEN reporting_type = 'unknown' THEN 1 ELSE 0 END), 0) as unknownTransactionCount,
         COALESCE(SUM(${metrics.revenueExpr}), 0) as revenueCents,
         COALESCE(SUM(${metrics.expenditureExpr}), 0) as expenditureCents,
         COALESCE(SUM(${metrics.normalizedNetExpr}), 0) as normalizedNetCents,
-        COALESCE(SUM(CASE WHEN reporting_type = 'unknown' THEN ABS(net_cents) ELSE 0 END), 0) as unknownCents
-       FROM normalized_transactions
-       ${whereSql}
-       GROUP BY account, source_sheet, account_type
-       ORDER BY ABS(normalizedNetCents) DESC, account ASC`,
-    )
-    .all(params) as {
+        COALESCE(SUM(CASE WHEN reporting_type = 'transfer' THEN ABS(report_amount_cents) ELSE 0 END), 0) as transferCents,
+        COALESCE(SUM(CASE WHEN reporting_type = 'ignored' THEN ABS(report_amount_cents) ELSE 0 END), 0) as ignoredCents,
+        COALESCE(SUM(CASE WHEN reporting_type = 'unknown' THEN ABS(report_amount_cents) ELSE 0 END), 0) as unknownCents
+       FROM reporting_transactions
+       ${whereSql}`,
+      params,
+    );
+}
+
+export async function getByAccountReport(filters: ReportFilters = {}) {
+  const { whereSql, params } = reportWhere(filters);
+  const metrics = buildReportMetricSql(filters);
+
+  return dbAll<{
     account: string;
     sourceSheet: string;
     accountType: AccountType | null;
@@ -142,30 +148,29 @@ export function getByAccountReport(filters: ReportFilters = {}) {
     expenditureCents: number;
     normalizedNetCents: number;
     unknownCents: number;
-  }[];
-}
-
-export function getByCategoryReport(filters: ReportFilters = {}) {
-  const { whereSql, params } = reportWhere(filters);
-  const metrics = buildReportMetricSql(filters);
-
-  return getDb()
-    .prepare(
+  }>(
       `SELECT
-        COALESCE(accounting_category, '') as categoryCode,
-        COALESCE(accounting_category_label, '') as categoryLabel,
-        reporting_type as reportingType,
+        account,
+        source_sheet as sourceSheet,
+        account_type as accountType,
         COUNT(*) as transactionCount,
         COALESCE(SUM(${metrics.revenueExpr}), 0) as revenueCents,
         COALESCE(SUM(${metrics.expenditureExpr}), 0) as expenditureCents,
         COALESCE(SUM(${metrics.normalizedNetExpr}), 0) as normalizedNetCents,
-        COALESCE(SUM(ABS(net_cents)), 0) as absoluteNetCents
-       FROM normalized_transactions
+        COALESCE(SUM(CASE WHEN reporting_type = 'unknown' THEN ABS(report_amount_cents) ELSE 0 END), 0) as unknownCents
+       FROM reporting_transactions
        ${whereSql}
-       GROUP BY COALESCE(accounting_category, ''), COALESCE(accounting_category_label, ''), reporting_type
-       ORDER BY reporting_type ASC, ABS(absoluteNetCents) DESC, categoryCode ASC`,
-    )
-    .all(params) as {
+       GROUP BY account, source_sheet, account_type
+       ORDER BY ABS(normalizedNetCents) DESC, account ASC`,
+      params,
+    );
+}
+
+export async function getByCategoryReport(filters: ReportFilters = {}) {
+  const { whereSql, params } = reportWhere(filters);
+  const metrics = buildReportMetricSql(filters);
+
+  return dbAll<{
     categoryCode: string;
     categoryLabel: string;
     reportingType: CategoryType;
@@ -174,18 +179,124 @@ export function getByCategoryReport(filters: ReportFilters = {}) {
     expenditureCents: number;
     normalizedNetCents: number;
     absoluteNetCents: number;
-  }[];
+  }>(
+      `SELECT
+        COALESCE(accounting_category, '') as categoryCode,
+        COALESCE(accounting_category_label, '') as categoryLabel,
+        reporting_type as reportingType,
+        COUNT(*) as transactionCount,
+        COALESCE(SUM(${metrics.revenueExpr}), 0) as revenueCents,
+        COALESCE(SUM(${metrics.expenditureExpr}), 0) as expenditureCents,
+        COALESCE(SUM(${metrics.normalizedNetExpr}), 0) as normalizedNetCents,
+        COALESCE(SUM(ABS(report_amount_cents)), 0) as absoluteNetCents
+       FROM reporting_transactions
+       ${whereSql}
+       GROUP BY COALESCE(accounting_category, ''), COALESCE(accounting_category_label, ''), reporting_type
+       ORDER BY reporting_type ASC, ABS(absoluteNetCents) DESC, categoryCode ASC`,
+      params,
+    );
 }
 
-export function getExceptionsReport(filters: ReportFilters = {}) {
+export async function getSummaryBucketReport(filters: ReportFilters = {}) {
+  const { whereSql, params } = reportWhere(filters);
+  const scopedJoinFilterSql = scopeWhereSql(whereSql, "entries").replace(
+    /^WHERE\s+/,
+    "AND ",
+  );
+  const orderBy = summaryBucketOrderBy(filters.summaryBucketSort, filters.summaryBucketSortDir);
+  const bucketClauses: string[] = [];
+  const bucketParams: Record<string, string> = {};
+
+  if (filters.summaryBucketSection) {
+    bucketClauses.push("buckets.section_name = $summaryBucketSection");
+    bucketParams.summaryBucketSection = filters.summaryBucketSection;
+  }
+
+  const bucketWhereSql = bucketClauses.length ? `WHERE ${bucketClauses.join(" AND ")}` : "";
+  const havingSql = filters.showEmptyBuckets ? "" : "HAVING COALESCE(totalCents, 0) != 0";
+
+  return dbAll<{
+    bucketKey: string;
+    bucketName: string;
+    sectionName: string;
+    reportType: "revenue" | "expense";
+    sourceCell: string;
+    displayOrder: number;
+    transactionCount: number;
+    totalCents: number;
+  }>(
+      `SELECT
+        buckets.bucket_key as bucketKey,
+        buckets.bucket_name as bucketName,
+        buckets.section_name as sectionName,
+        buckets.report_type as reportType,
+        buckets.source_cell as sourceCell,
+        buckets.display_order as displayOrder,
+        COUNT(DISTINCT entries.transaction_id) as transactionCount,
+        COALESCE(SUM(COALESCE(entries.total_cents, 0)), 0) as totalCents
+       FROM (
+         SELECT
+           bucket_key,
+           bucket_name,
+           section_name,
+           report_type,
+           source_cell,
+           MIN(display_order) as display_order
+         FROM summary_named_bucket_rules
+         WHERE is_active = 1
+         GROUP BY bucket_key, bucket_name, section_name, report_type, source_cell
+       ) buckets
+       LEFT JOIN reporting_bucket_entries entries
+         ON entries.bucket_key = buckets.bucket_key
+        ${scopedJoinFilterSql}
+       ${bucketWhereSql}
+       GROUP BY
+         buckets.bucket_key,
+         buckets.bucket_name,
+         buckets.section_name,
+         buckets.report_type,
+         buckets.source_cell
+       ${havingSql}
+       ${orderBy}`,
+      { ...params, ...bucketParams },
+    );
+}
+
+export async function getSummaryBucketSections() {
+  return dbAll<{ sectionName: string }>(
+    `SELECT DISTINCT section_name as sectionName
+     FROM summary_named_bucket_rules
+     WHERE is_active = 1
+     ORDER BY section_name ASC`,
+  );
+}
+
+export async function getExceptionsReport(filters: ReportFilters = {}) {
   const { whereSql, params } = reportWhere(filters);
 
-  return getDb()
-    .prepare(
+  return dbAll<{
+    id: number;
+    sourceSheet: string;
+    sourceRow: number;
+    account: string;
+    accountType: AccountType | null;
+    transactionDate: string | null;
+    clearDate: string | null;
+    payee: string | null;
+    description: string | null;
+    netCents: number;
+    accountingCategory: string | null;
+    accountingCategoryLabel: string | null;
+    programCategory: string | null;
+    programCategoryLabel: string | null;
+    reportingType: CategoryType;
+    rawJson: string | null;
+    reason: string;
+  }>(
       `SELECT *
        FROM (
         SELECT
-          id,
+          transaction_id as id,
           source_sheet as sourceSheet,
           source_row as sourceRow,
           account,
@@ -217,73 +328,21 @@ export function getExceptionsReport(filters: ReportFilters = {}) {
             END ||
             CASE WHEN account_type = 'credit_card' AND reporting_type IN ('unknown', 'revenue') AND net_cents != 0 THEN 'ambiguous credit card transaction; ' ELSE '' END
           ) as reason
-        FROM normalized_transactions
+       FROM reporting_transactions
         ${whereSql}
        )
        WHERE reason != ''
        ORDER BY COALESCE(clearDate, transactionDate, '') DESC, id DESC
        LIMIT 10000`,
-    )
-    .all(params) as {
-    id: number;
-    sourceSheet: string;
-    sourceRow: number;
-    account: string;
-    accountType: AccountType | null;
-    transactionDate: string | null;
-    clearDate: string | null;
-    payee: string | null;
-    description: string | null;
-    netCents: number;
-    accountingCategory: string | null;
-    accountingCategoryLabel: string | null;
-    programCategory: string | null;
-    programCategoryLabel: string | null;
-    reportingType: CategoryType;
-    rawJson: string | null;
-    reason: string;
-  }[];
+      params,
+    );
 }
 
-export function getNormalizedTransactionsReport(filters: ReportFilters = {}) {
+export async function getNormalizedTransactionsReport(filters: ReportFilters = {}) {
   const { whereSql, params } = reportWhere(filters);
   const metrics = buildReportMetricSql(filters);
 
-  return getDb()
-    .prepare(
-      `SELECT
-        id,
-        import_id as importId,
-        source_sheet as sourceSheet,
-        source_row as sourceRow,
-        month,
-        account,
-        account_type as accountType,
-        source,
-        check_number as checkNumber,
-        transaction_date as transactionDate,
-        clear_date as clearDate,
-        payee,
-        gross_cents as grossCents,
-        fee_cents as feeCents,
-        net_cents as netCents,
-        reporting_type as reportingType,
-        ${metrics.revenueExpr} as revenueCents,
-        ${metrics.expenditureExpr} as expenditureCents,
-        ${metrics.normalizedNetExpr} as normalizedNetCents,
-        cleared,
-        accounting_category as accountingCategory,
-        accounting_category_label as accountingCategoryLabel,
-        program_category as programCategory,
-        program_category_label as programCategoryLabel,
-        description,
-        raw_json as rawJson
-       FROM normalized_transactions
-       ${whereSql}
-       ORDER BY COALESCE(clear_date, transaction_date, '') DESC, id DESC
-       LIMIT 100000`,
-    )
-    .all(params) as {
+  return dbAll<{
     id: number;
     importId: number;
     sourceSheet: string;
@@ -310,33 +369,67 @@ export function getNormalizedTransactionsReport(filters: ReportFilters = {}) {
     programCategoryLabel: string | null;
     description: string | null;
     rawJson: string | null;
-  }[];
+  }>(
+      `SELECT
+        transaction_id as id,
+        import_id as importId,
+        source_sheet as sourceSheet,
+        source_row as sourceRow,
+        month,
+        account,
+        account_type as accountType,
+        source,
+        check_number as checkNumber,
+        transaction_date as transactionDate,
+        clear_date as clearDate,
+        payee,
+        gross_cents as grossCents,
+        fee_cents as feeCents,
+        net_cents as netCents,
+        reporting_type as reportingType,
+        ${metrics.revenueExpr} as revenueCents,
+        ${metrics.expenditureExpr} as expenditureCents,
+        ${metrics.normalizedNetExpr} as normalizedNetCents,
+        cleared,
+        accounting_category as accountingCategory,
+        accounting_category_label as accountingCategoryLabel,
+        program_category as programCategory,
+        program_category_label as programCategoryLabel,
+        description,
+        raw_json as rawJson
+       FROM reporting_transactions
+       ${whereSql}
+       ORDER BY COALESCE(clear_date, transaction_date, '') DESC, transaction_id DESC
+       LIMIT 100000`,
+      params,
+    );
 }
 
 function reportWhere(filters: ReportFilters) {
   const dateField = filters.dateField ?? "transaction_date";
   assertDateField(dateField);
+  const dateExpression = reportDateExpression(dateField);
 
   const clauses: string[] = [];
   const params: Record<string, string> = {};
 
   if (filters.startDate) {
-    clauses.push(`${dateField} >= @startDate`);
+    clauses.push(`${dateExpression} >= $startDate`);
     params.startDate = filters.startDate;
   }
 
   if (filters.endDate) {
-    clauses.push(`${dateField} < @endDate`);
+    clauses.push(`${dateExpression} < $endDate`);
     params.endDate = filters.endDate;
   }
 
   if (filters.account) {
-    clauses.push("source_sheet = @account");
+    clauses.push("source_sheet = $account");
     params.account = filters.account;
   }
 
   if (filters.reportingType && filters.reportingType !== "all") {
-    clauses.push("reporting_type = @reportingType");
+    clauses.push("reporting_type = $reportingType");
     params.reportingType = filters.reportingType;
   }
 
@@ -350,25 +443,26 @@ function reportWhere(filters: ReportFilters) {
 }
 
 function buildReportMetricSql(filters: ReportFilters) {
+  const summaryRevenueExpr = "workbook_revenue_cents";
+  const summaryExpenditureExpr = "workbook_expenditure_cents";
+  const summaryNetExpr = "workbook_normalized_net_cents";
+
   if (!filters.includeUncategorized) {
     return {
-      revenueExpr: "revenue_cents",
-      expenditureExpr: "expenditure_cents",
-      normalizedNetExpr: "normalized_net_cents",
+      revenueExpr: summaryRevenueExpr,
+      expenditureExpr: summaryExpenditureExpr,
+      normalizedNetExpr: summaryNetExpr,
     };
   }
 
-  const unknownRevenueExpr =
-    "CASE WHEN reporting_type = 'unknown' AND account_type != 'credit_card' AND net_cents > 0 THEN net_cents ELSE 0 END";
-  const unknownExpenditureExpr =
-    "CASE WHEN reporting_type = 'unknown' AND net_cents < 0 THEN -net_cents ELSE 0 END";
-  const unknownNetExpr =
-    "CASE WHEN reporting_type = 'unknown' AND account_type != 'credit_card' AND net_cents > 0 THEN net_cents WHEN reporting_type = 'unknown' AND net_cents < 0 THEN net_cents ELSE 0 END";
+  const unknownRevenueExpr = "unknown_revenue_cents";
+  const unknownExpenditureExpr = "unknown_expenditure_cents";
+  const unknownNetExpr = `(${unknownRevenueExpr} + ${unknownExpenditureExpr})`;
 
   return {
-    revenueExpr: `(revenue_cents + ${unknownRevenueExpr})`,
-    expenditureExpr: `(expenditure_cents + ${unknownExpenditureExpr})`,
-    normalizedNetExpr: `(normalized_net_cents + ${unknownNetExpr})`,
+    revenueExpr: `(${summaryRevenueExpr} + ${unknownRevenueExpr})`,
+    expenditureExpr: `(${summaryExpenditureExpr} + ${unknownExpenditureExpr})`,
+    normalizedNetExpr: `(${summaryNetExpr} + ${unknownNetExpr})`,
   };
 }
 
@@ -391,16 +485,52 @@ function addMultiValueClause(
   const placeholders = uniqueValues.map((value, index) => {
     const key = `${paramPrefix}${index}`;
     params[key] = value;
-    return `@${key}`;
+    return `$${key}`;
   });
 
   clauses.push(`${column} IN (${placeholders.join(", ")})`);
 }
 
+function scopeWhereSql(whereSql: string, tableName: string) {
+  if (!whereSql) {
+    return "";
+  }
+
+  return whereSql.replaceAll(
+    /\b(source_sheet|reporting_type|accounting_category|program_category|transaction_date|clear_date|created_at|month|workbook_month_date)\b/g,
+    `${tableName}.$1`,
+  );
+}
+
+function summaryBucketOrderBy(
+  sort: SummaryBucketSort = "type",
+  direction: SortDirection = "asc",
+) {
+  const dir = direction === "desc" ? "DESC" : "ASC";
+
+  switch (sort) {
+    case "section":
+      return `ORDER BY buckets.section_name ${dir}, MIN(buckets.display_order) ASC, buckets.bucket_name ASC`;
+    case "bucket":
+      return `ORDER BY buckets.bucket_name ${dir}, buckets.section_name ASC, MIN(buckets.display_order) ASC`;
+    case "transactions":
+      return `ORDER BY transactionCount ${dir}, buckets.report_type ASC, MIN(buckets.display_order) ASC`;
+    case "total":
+      return `ORDER BY ABS(totalCents) ${dir}, buckets.report_type ASC, MIN(buckets.display_order) ASC`;
+    case "type":
+    default:
+      return `ORDER BY buckets.report_type ${dir}, MIN(buckets.display_order) ASC, buckets.bucket_name ASC`;
+  }
+}
+
 function assertDateField(dateField: string): asserts dateField is ReportDateField {
-  if (!["transaction_date", "clear_date", "created_at"].includes(dateField)) {
+  if (!["transaction_date", "clear_date", "created_at", "workbook_month"].includes(dateField)) {
     throw new Error(`Unsupported report date field: ${dateField}`);
   }
+}
+
+function reportDateExpression(dateField: ReportDateField) {
+  return dateField === "workbook_month" ? "workbook_month_date" : dateField;
 }
 
 function normalizeCategoryCode(value?: string | null) {

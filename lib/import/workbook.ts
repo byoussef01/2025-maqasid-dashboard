@@ -1,9 +1,20 @@
 import * as XLSX from "xlsx";
 import fs from "node:fs";
 
-import { getDb } from "@/lib/db/client";
+import { getDb, txExecute, withWriteTransaction } from "@/lib/db/client";
 import { knownAccountSheets } from "@/lib/db/schema";
+import {
+  buildSummaryCategorySets,
+  deriveSummaryCategoryRules,
+  deriveSummaryNamedBucketRules,
+  type SummaryCategoryRule,
+  type SummaryNamedBucketRule,
+  summarySheetExpenseCents,
+  summarySheetRevenueCents,
+} from "@/lib/reports/summary-formula";
+import { ensureReportingCacheSchema, rebuildReportingCache } from "@/lib/reports/cache";
 import type {
+  AccountType,
   CategoryType,
   NormalizedCategory,
   NormalizedTransaction,
@@ -19,10 +30,16 @@ type ParsedSheet = {
   warning?: string;
 };
 type HeaderMap = Partial<Record<ExpectedHeader, number>>;
+type WorkbookFeeAllocationRule = {
+  sheetName: string;
+  categoryCode: string;
+  helperRow: number;
+  feeStartRow: number;
+  feeEndRow: number;
+};
 
 const REQUIRED_HEADER_MARKERS = ["Month", "Account", "Trans. Date", "Clear Date", "Net"];
 const HEADER_SCAN_ROWS = 40;
-const BLANK_ROW_STOP_STRETCH = 25;
 const EXPECTED_HEADERS = [
   "Month",
   "Account",
@@ -46,7 +63,28 @@ export type ParsedWorkbook = {
   result: WorkbookImportResult;
   transactions: NormalizedTransaction[];
   categories: NormalizedCategory[];
+  summaryCategoryRules: SummaryCategoryRule[];
+  summaryNamedBucketRules: SummaryNamedBucketRule[];
   countsBySheet: Record<string, number>;
+  audit: WorkbookImportAudit;
+};
+
+export type WorkbookImportAudit = {
+  expectedRevenueCents?: number;
+  parsedRevenueCents: number;
+  revenueDeltaCents?: number;
+  expectedExpenseCents?: number;
+  parsedExpenseCents: number;
+  expenseDeltaCents?: number;
+  expenseHelperMismatches: WorkbookExpenseHelperMismatch[];
+};
+
+export type WorkbookExpenseHelperMismatch = {
+  sheetName: string;
+  categoryCode: string;
+  workbookNetCents: number;
+  parsedNetCents: number;
+  deltaCents: number;
 };
 
 export type WorkbookImportSummary = {
@@ -56,6 +94,7 @@ export type WorkbookImportSummary = {
   countsBySheet: Record<string, number>;
   skippedRows: number;
   warnings: string[];
+  audit: WorkbookImportAudit;
 };
 
 export async function parseWorkbookFile(file: File): Promise<ParsedWorkbook> {
@@ -68,6 +107,8 @@ export async function parseWorkbookFile(file: File): Promise<ParsedWorkbook> {
 export function parseWorkbook(workbook: XLSX.WorkBook, fileName: string): ParsedWorkbook {
   const warnings: string[] = [];
   const categories = parseCategories(workbook.Sheets.Categories);
+  const summaryCategoryRules = deriveSummaryCategoryRules(workbook);
+  const summaryNamedBucketRules = deriveSummaryNamedBucketRules(workbook, summaryCategoryRules);
   const transactions: NormalizedTransaction[] = [];
   const countsBySheet: Record<string, number> = {};
   let skippedRows = 0;
@@ -90,6 +131,13 @@ export function parseWorkbook(workbook: XLSX.WorkBook, fileName: string): Parsed
     }
   }
 
+  transactions.push(
+    ...deriveFeeAllocationTransactions(workbook, transactions, summaryCategoryRules),
+  );
+
+  const audit = auditWorkbookSummary(workbook, transactions, summaryCategoryRules);
+  warnings.push(...summaryAuditWarnings(audit));
+
   const accountCount = new Set(transactions.map((transaction) => transaction.accountName)).size;
   const importedAt = new Date().toISOString();
 
@@ -106,11 +154,17 @@ export function parseWorkbook(workbook: XLSX.WorkBook, fileName: string): Parsed
     },
     transactions,
     categories,
+    summaryCategoryRules,
+    summaryNamedBucketRules,
     countsBySheet,
+    audit,
   };
 }
 
-export function importWorkbook(filePath: string, sourceFilename?: string): WorkbookImportSummary {
+export async function importWorkbook(
+  filePath: string,
+  sourceFilename?: string,
+): Promise<WorkbookImportSummary> {
   let workbook: XLSX.WorkBook;
 
   try {
@@ -131,17 +185,20 @@ export function importWorkbook(filePath: string, sourceFilename?: string): Workb
     );
   }
 
-  const db = getDb();
+  await ensureReportingCacheSchema(getDb());
 
-  const run = db.transaction(() => {
-    db.exec("DELETE FROM transactions; DELETE FROM category_rules; DELETE FROM imports;");
+  const importId = await withWriteTransaction(async (transaction) => {
+    await ensureReportingCacheSchema(transaction);
+    await txExecute(
+      transaction,
+      "DELETE FROM transactions; DELETE FROM category_rules; DELETE FROM summary_named_bucket_rules; DELETE FROM summary_category_rules; DELETE FROM imports;",
+    );
 
-    const importInfo = db
-      .prepare(
-        `INSERT INTO imports (filename, imported_at, source_type, row_count, notes)
-         VALUES (?, ?, ?, ?, ?)`,
-      )
-      .run(
+    const importInfo = await txExecute(transaction, {
+      sql: `INSERT INTO imports (filename, imported_at, source_type, row_count, notes)
+            VALUES (?, ?, ?, ?, ?)
+            RETURNING id`,
+      args: [
         parsed.result.fileName,
         parsed.result.importedAt,
         "xlsx",
@@ -150,15 +207,23 @@ export function importWorkbook(filePath: string, sourceFilename?: string): Workb
           countsBySheet: parsed.countsBySheet,
           skippedRows: parsed.result.skippedRows,
           warnings: parsed.result.warnings,
+          audit: parsed.audit,
         }),
-      );
+      ],
+    });
 
-    const importId = Number(importInfo.lastInsertRowid);
-    insertParsedWorkbookRows(importId, parsed.transactions, parsed.categories);
-    return importId;
+    const id = Number((importInfo.rows[0] as Record<string, unknown> | undefined)?.id ?? 0);
+    await insertParsedWorkbookRows(
+      transaction,
+      id,
+      parsed.transactions,
+      parsed.categories,
+      parsed.summaryCategoryRules,
+      parsed.summaryNamedBucketRules,
+    );
+    await rebuildReportingCache(transaction);
+    return id;
   });
-
-  const importId = run();
 
   return {
     importId,
@@ -167,55 +232,137 @@ export function importWorkbook(filePath: string, sourceFilename?: string): Workb
     countsBySheet: parsed.countsBySheet,
     skippedRows: parsed.result.skippedRows,
     warnings: parsed.result.warnings,
+    audit: parsed.audit,
   };
 }
 
-export function insertParsedWorkbookRows(
+export async function insertParsedWorkbookRows(
+  transaction: Parameters<typeof txExecute>[0],
   importId: number,
   transactions: NormalizedTransaction[],
   categories: NormalizedCategory[],
+  summaryCategoryRules: SummaryCategoryRule[],
+  summaryNamedBucketRules: SummaryNamedBucketRule[],
 ) {
-  const db = getDb();
-  const upsertAccount = db.prepare(
-    `INSERT INTO accounts (sheet_name, display_name, account_type, is_active)
-     VALUES (?, ?, ?, 1)
-     ON CONFLICT(sheet_name) DO UPDATE SET
-       display_name = excluded.display_name,
-       is_active = 1`,
-  );
-  const insertCategoryRule = db.prepare(
-    `INSERT OR IGNORE INTO category_rules (
-      category_code, category_type, description, is_active
-    ) VALUES (?, ?, ?, 1)`,
-  );
-  const insertTransaction = db.prepare(
-    `INSERT INTO transactions (
-      import_id, source_sheet, source_row, month, account, source, check_number,
-      transaction_date, clear_date, payee, gross_cents, fee_cents, net_cents,
-      cleared, accounting_category, program_category, description, raw_json
-    ) VALUES (
-      @importId, @sourceSheet, @sourceRow, @month, @accountName, @source, @checkNumber,
-      @transactionDate, @clearDate, @payee, @grossCents, @feeCents, @netCents,
-      @cleared, @accountingCategory, @programCategory, @description, @rawJson
-    )`,
-  );
-
   for (const category of categories) {
-    insertCategoryRule.run(category.code, category.type, category.name);
+    await txExecute(transaction, {
+      sql: `INSERT OR IGNORE INTO category_rules (
+              category_code, category_type, description, is_active
+            ) VALUES (?, ?, ?, 1)`,
+      args: [category.code, category.type, category.name],
+    });
   }
 
-  for (const transaction of transactions) {
-    upsertAccount.run(
-      transaction.sourceSheet,
-      transaction.accountName || transaction.sourceSheet,
-      inferAccountType(transaction.sourceSheet),
-    );
-    insertTransaction.run({ importId, ...nullableTransaction(transaction) });
+  for (const rule of summaryCategoryRules) {
+    await txExecute(transaction, {
+      sql: `INSERT OR REPLACE INTO summary_category_rules (
+              category_code, summary_bucket, source, is_active
+            ) VALUES (?, ?, 'workbook', 1)`,
+      args: [rule.categoryCode, rule.summaryBucket],
+    });
+  }
+
+  for (const rule of summaryNamedBucketRules) {
+    await txExecute(transaction, {
+      sql: `INSERT OR REPLACE INTO summary_named_bucket_rules (
+              bucket_key, bucket_name, section_name, report_type, source_cell, display_order,
+              category_code, summary_bucket, source, is_active
+            ) VALUES (?, ?, ?, ?, ?, ?, ?, ?, 'workbook', 1)`,
+      args: [
+        rule.bucketKey,
+        rule.bucketName,
+        rule.sectionName,
+        rule.reportType,
+        rule.sourceCell,
+        rule.displayOrder,
+        rule.categoryCode,
+        rule.summaryBucket,
+      ],
+    });
+  }
+
+  for (const transactionRow of transactions) {
+    await txExecute(transaction, {
+      sql: `INSERT INTO accounts (sheet_name, display_name, account_type, is_active)
+            VALUES (?, ?, ?, 1)
+            ON CONFLICT(sheet_name) DO UPDATE SET
+              display_name = excluded.display_name,
+              is_active = 1`,
+      args: [
+        transactionRow.sourceSheet,
+        transactionRow.accountName || transactionRow.sourceSheet,
+        inferAccountType(transactionRow.sourceSheet),
+      ],
+    });
+    await txExecute(transaction, {
+      sql: `INSERT INTO transactions (
+              import_id, source_sheet, source_row, month, account, source, check_number,
+              transaction_date, clear_date, payee, gross_cents, fee_cents, net_cents,
+              cleared, accounting_category, program_category, description, raw_json
+            ) VALUES (
+              $importId, $sourceSheet, $sourceRow, $month, $accountName, $source, $checkNumber,
+              $transactionDate, $clearDate, $payee, $grossCents, $feeCents, $netCents,
+              $cleared, $accountingCategory, $programCategory, $description, $rawJson
+            )`,
+      args: { importId, ...nullableTransaction(transactionRow) },
+    });
   }
 }
 
 function parseAccountSheet(sheetName: string, sheet: XLSX.WorkSheet): ParsedSheet {
   return parseStandardAccountSheet(sheetName, sheet);
+}
+
+function deriveFeeAllocationTransactions(
+  workbook: XLSX.WorkBook,
+  transactions: NormalizedTransaction[],
+  summaryCategoryRules: SummaryCategoryRule[],
+) {
+  const rules = detectWorkbookFeeAllocationRules(workbook, summaryCategoryRules);
+  if (!rules.length) {
+    return [];
+  }
+
+  const derived: NormalizedTransaction[] = [];
+
+  for (const rule of rules) {
+    const sheetTransactions = transactions.filter(
+      (transaction) =>
+        transaction.sourceSheet === rule.sheetName &&
+        transaction.sourceRow >= rule.feeStartRow &&
+        transaction.sourceRow <= rule.feeEndRow &&
+        transaction.feeCents !== 0 &&
+        !isDerivedTransaction(transaction),
+    );
+
+    for (const transaction of sheetTransactions) {
+      derived.push({
+        ...transaction,
+        grossCents: -transaction.feeCents,
+        feeCents: 0,
+        netCents: -transaction.feeCents,
+        direction: directionFor(-transaction.feeCents),
+        source: transaction.source ? `${transaction.source} fee allocation` : "Fee allocation",
+        accountingCategory: rule.categoryCode,
+        programCategory: transaction.programCategory ?? undefined,
+        description: transaction.description
+          ? `${transaction.description} [Workbook fee allocation]`
+          : "Workbook fee allocation",
+        rawJson: JSON.stringify({
+          kind: "workbook_fee_allocation",
+          sourceSheet: rule.sheetName,
+          sourceRow: transaction.sourceRow,
+          helperRow: rule.helperRow,
+          categoryCode: rule.categoryCode,
+          feeCents: transaction.feeCents,
+          feeStartRow: rule.feeStartRow,
+          feeEndRow: rule.feeEndRow,
+        }),
+      });
+    }
+  }
+
+  return derived;
 }
 
 function parseStandardAccountSheet(sheetName: string, sheet: XLSX.WorkSheet): ParsedSheet {
@@ -232,7 +379,6 @@ function parseStandardAccountSheet(sheetName: string, sheet: XLSX.WorkSheet): Pa
   const columnMap = buildColumnMap(sheet, headerRow);
   const transactions: NormalizedTransaction[] = [];
   let skippedRows = 0;
-  let blankStretch = 0;
   const range = XLSX.utils.decode_range(sheet["!ref"] ?? "A1:A1");
 
   for (let rowNumber = headerRow + 1; rowNumber <= range.e.r + 1; rowNumber += 1) {
@@ -240,14 +386,8 @@ function parseStandardAccountSheet(sheetName: string, sheet: XLSX.WorkSheet): Pa
 
     if (isFullyBlank(row)) {
       skippedRows += 1;
-      blankStretch += 1;
-      if (blankStretch >= BLANK_ROW_STOP_STRETCH) {
-        break;
-      }
       continue;
     }
-
-    blankStretch = 0;
 
     const transactionDate = toIsoDate(row["Trans. Date"]);
     const clearDate = toIsoDate(row["Clear Date"]);
@@ -259,8 +399,24 @@ function parseStandardAccountSheet(sheetName: string, sheet: XLSX.WorkSheet): Pa
     const netCents = transactionAmountCents(row, grossCents, feeCents);
     const hasAmount = grossCents !== 0 || feeCents !== 0 || netCents !== 0;
     const hasCategory = Boolean(accountingCategory || programCategory);
+    const hasTransactionSignal = Boolean(
+      transactionDate ||
+        clearDate ||
+        payee ||
+        stringValue(row.Source) ||
+        stringValue(row["Check #"]) ||
+        stringValue(row["Description/Memo"]) ||
+        hasCategory,
+    );
 
     if (!transactionDate && !clearDate && !hasAmount && !payee && !hasCategory) {
+      skippedRows += 1;
+      continue;
+    }
+
+    // Formula workbooks often carry footer/helper balances beneath the transaction area.
+    // Skip amount-only rows with no transaction identifiers so SQLite mirrors the workbook tables.
+    if (!hasTransactionSignal) {
       skippedRows += 1;
       continue;
     }
@@ -299,11 +455,12 @@ function parseCategories(sheet?: XLSX.WorkSheet): NormalizedCategory[] {
 
   const categories: NormalizedCategory[] = [];
 
+  // The Summary sheet's reporting formulas point at these lists for accounting categories.
   categories.push(...categoryPairs(sheet, "J", "K", "revenue", 3, 300));
   categories.push(...categoryPairs(sheet, "M", "N", "expenditure", 3, 300));
+
+  // Program categories are labels for reporting filters; they should not classify revenue/expense.
   categories.push(...categoryPairs(sheet, "P", "Q", "unknown", 3, 300));
-  categories.push(...categoryPairs(sheet, "B", "C", "revenue", 4, 300, "D"));
-  categories.push(...categoryPairs(sheet, "F", "G", "expenditure", 4, 300, "H"));
 
   const seen = new Set<string>();
   return categories.filter((category) => {
@@ -314,6 +471,326 @@ function parseCategories(sheet?: XLSX.WorkSheet): NormalizedCategory[] {
     seen.add(key);
     return true;
   });
+}
+
+function auditWorkbookSummary(
+  workbook: XLSX.WorkBook,
+  transactions: NormalizedTransaction[],
+  summaryCategoryRules: SummaryCategoryRule[],
+): WorkbookImportAudit {
+  const expectedRevenueCents = summaryCellMoneyCents(workbook.Sheets.Summary, "C75");
+  const expectedExpenseCents = summaryCellMoneyCents(workbook.Sheets.Summary, "G84");
+  const summaryCategorySets = buildSummaryCategorySets(summaryCategoryRules);
+  let parsedRevenueCents = 0;
+  let parsedExpenseCents = 0;
+
+  for (const transaction of transactions) {
+    const accountType = inferAccountType(transaction.sourceSheet);
+    parsedRevenueCents += summarySheetRevenueCents(transaction, accountType, summaryCategorySets);
+    parsedExpenseCents += summarySheetExpenseCents(transaction, accountType, summaryCategorySets);
+  }
+
+  const expenseHelperMismatches = auditWorkbookExpenseHelpers(
+    workbook,
+    transactions,
+    summaryCategoryRules,
+  );
+
+  return {
+    expectedRevenueCents,
+    parsedRevenueCents,
+    revenueDeltaCents:
+      expectedRevenueCents === undefined ? undefined : parsedRevenueCents - expectedRevenueCents,
+    expectedExpenseCents,
+    parsedExpenseCents,
+    expenseDeltaCents:
+      expectedExpenseCents === undefined ? undefined : parsedExpenseCents - expectedExpenseCents,
+    expenseHelperMismatches,
+  };
+}
+
+function summaryAuditWarnings(audit: WorkbookImportAudit) {
+  const warnings: string[] = [];
+
+  if (audit.expectedRevenueCents === undefined || audit.expectedExpenseCents === undefined) {
+    warnings.push(
+      "Summary audit could not read cached workbook totals from Summary!C75 and Summary!G84. Re-export from Google Sheets after recalculation if you want an import-time formula check.",
+    );
+    return warnings;
+  }
+
+  if (Math.abs(audit.revenueDeltaCents ?? 0) > 1) {
+    warnings.push(
+      `Summary audit mismatch for C75 revenue: workbook ${formatAuditCurrency(audit.expectedRevenueCents)}, parsed ${formatAuditCurrency(audit.parsedRevenueCents)}, delta ${formatAuditCurrency(audit.revenueDeltaCents ?? 0)}.`,
+    );
+  }
+
+  if (Math.abs(audit.expenseDeltaCents ?? 0) > 1) {
+    warnings.push(
+      `Summary audit mismatch for G84 expenses: workbook ${formatAuditCurrency(audit.expectedExpenseCents)}, parsed ${formatAuditCurrency(audit.parsedExpenseCents)}, delta ${formatAuditCurrency(audit.expenseDeltaCents ?? 0)}.`,
+    );
+  }
+
+  for (const mismatch of audit.expenseHelperMismatches.slice(0, 10)) {
+    warnings.push(
+      `Expense helper mismatch for ${mismatch.sheetName} ${mismatch.categoryCode}: workbook ${formatAuditCurrency(mismatch.workbookNetCents)}, parsed ${formatAuditCurrency(mismatch.parsedNetCents)}, delta ${formatAuditCurrency(mismatch.deltaCents)}.`,
+    );
+  }
+
+  return warnings;
+}
+
+function auditWorkbookExpenseHelpers(
+  workbook: XLSX.WorkBook,
+  transactions: NormalizedTransaction[],
+  summaryCategoryRules: SummaryCategoryRule[],
+): WorkbookExpenseHelperMismatch[] {
+  const expenseCategoryRows = summaryCategoryRules
+    .filter(
+      (rule): rule is SummaryCategoryRule & { categoriesRow: number } =>
+        rule.summaryBucket === "expense_net" && typeof rule.categoriesRow === "number",
+    )
+    .map((rule) => ({ code: rule.categoryCode, row: rule.categoriesRow }));
+  if (expenseCategoryRows.length === 0) {
+    return [];
+  }
+
+  const summaryCategorySets = buildSummaryCategorySets(summaryCategoryRules);
+  const parsedBySheetAndCategory = new Map<string, number>();
+
+  for (const transaction of transactions) {
+    if (!transaction.accountingCategory) {
+      continue;
+    }
+
+    const accountType = inferAccountType(transaction.sourceSheet);
+    const amount = summarySheetExpenseCents(transaction, accountType, summaryCategorySets);
+    if (amount === 0) {
+      continue;
+    }
+
+    const key = `${transaction.sourceSheet}::${transaction.accountingCategory}`;
+    parsedBySheetAndCategory.set(key, (parsedBySheetAndCategory.get(key) ?? 0) + amount);
+  }
+
+  const mismatches: WorkbookExpenseHelperMismatch[] = [];
+
+  for (const { sheetName } of knownAccountSheets) {
+    const sheet = workbook.Sheets[sheetName];
+    if (!sheet) {
+      continue;
+    }
+
+    const headerRow = findHeaderRow(sheet, REQUIRED_HEADER_MARKERS, HEADER_SCAN_ROWS);
+    if (!headerRow) {
+      continue;
+    }
+
+    const helperColumns = findExpenseHelperColumns(sheet, headerRow);
+    if (!helperColumns) {
+      continue;
+    }
+
+    const accountType = inferAccountType(sheetName);
+
+    for (const { code: categoryCode, row } of expenseCategoryRows) {
+      const rowNumber = headerRow + row - 2;
+      const rawNet = cellValue(
+        sheet,
+        XLSX.utils.encode_cell({ r: rowNumber - 1, c: helperColumns.netCol }),
+      );
+      const workbookNet = summaryCellMoneyCentsFromValue(rawNet);
+      if (workbookNet === undefined) {
+        continue;
+      }
+
+      const workbookContribution = accountType === "credit_card" ? -workbookNet : workbookNet;
+      const parsedNet =
+        parsedBySheetAndCategory.get(`${sheetName}::${categoryCode}`) ?? 0;
+      const delta = parsedNet - workbookContribution;
+
+      if (Math.abs(delta) > 1) {
+        mismatches.push({
+          sheetName,
+          categoryCode,
+          workbookNetCents: workbookContribution,
+          parsedNetCents: parsedNet,
+          deltaCents: delta,
+        });
+      }
+    }
+  }
+
+  return mismatches.sort((left, right) => Math.abs(right.deltaCents) - Math.abs(left.deltaCents));
+}
+
+function detectWorkbookFeeAllocationRules(
+  workbook: XLSX.WorkBook,
+  summaryCategoryRules: SummaryCategoryRule[],
+) {
+  const rules: WorkbookFeeAllocationRule[] = [];
+
+  for (const { sheetName } of knownAccountSheets) {
+    const sheet = workbook.Sheets[sheetName];
+    if (!sheet) {
+      continue;
+    }
+
+    const headerRow = findHeaderRow(sheet, REQUIRED_HEADER_MARKERS, HEADER_SCAN_ROWS);
+    if (!headerRow) {
+      continue;
+    }
+
+    const helperColumns = findExpenseHelperColumns(sheet, headerRow);
+    if (!helperColumns) {
+      continue;
+    }
+
+    for (const rule of summaryCategoryRules) {
+      if (rule.summaryBucket !== "expense_net" || typeof rule.categoriesRow !== "number") {
+        continue;
+      }
+
+      const helperRow = headerRow + rule.categoriesRow - 2;
+      const debitAddress = XLSX.utils.encode_cell({
+        r: helperRow - 1,
+        c: helperColumns.netCol - 1,
+      });
+      const debitFormula = cellFormula(sheet, debitAddress);
+      const feeRange = debitFormula ? referencedFeeRange(sheet, debitFormula, sheetName) : undefined;
+
+      if (!debitFormula || !feeRange) {
+        continue;
+      }
+
+      rules.push({
+        sheetName,
+        categoryCode: rule.categoryCode,
+        helperRow,
+        feeStartRow: feeRange.startRow,
+        feeEndRow: feeRange.endRow,
+      });
+    }
+  }
+
+  return rules;
+}
+
+function findExpenseHelperColumns(sheet: XLSX.WorkSheet, headerRow: number) {
+  const range = XLSX.utils.decode_range(sheet["!ref"] ?? "A1:A1");
+
+  for (let col = range.s.c; col <= range.e.c; col += 1) {
+    const value = normalizeHeaderName(
+      stringValue(cellValue(sheet, XLSX.utils.encode_cell({ r: headerRow - 1, c: col }))),
+    );
+    if (value === "Expense Category") {
+      return {
+        categoryCol: col,
+        netCol: col + 3,
+      };
+    }
+  }
+
+  return undefined;
+}
+
+function summaryCellMoneyCents(sheet: XLSX.WorkSheet | undefined, address: string) {
+  if (!sheet) {
+    return undefined;
+  }
+
+  return summaryCellMoneyCentsFromValue(cellValue(sheet, address));
+}
+
+function summaryCellMoneyCentsFromValue(value: CellValue) {
+  if (value === null || value === undefined || value === "" || value instanceof Date) {
+    return undefined;
+  }
+
+  if (typeof value === "boolean") {
+    return undefined;
+  }
+
+  return parseMoneyCents(value);
+}
+
+function referencedFeeRange(sheet: XLSX.WorkSheet, formula: string, sheetName: string) {
+  const normalized = formula.replace(/\s+/g, "");
+  if (/\[\[#Totals\],\[Fee\]\]/i.test(normalized)) {
+    const feeTotalFormula = feeTotalColumnFormula(sheet);
+    if (!feeTotalFormula) {
+      return undefined;
+    }
+
+    const match = feeTotalFormula.match(/SUM\(\$?[A-Z]{1,3}\$?(\d+):\$?[A-Z]{1,3}\$?(\d+)\)/i);
+    if (!match) {
+      return undefined;
+    }
+
+    return {
+      startRow: Number(match[1]),
+      endRow: Number(match[2]),
+    };
+  }
+
+  const referenceAddress = feeReferenceAddress(formula, sheetName);
+  if (!referenceAddress) {
+    return undefined;
+  }
+
+  const referencedFormula = cellFormula(sheet, referenceAddress);
+  if (!referencedFormula) {
+    return undefined;
+  }
+
+  const match = referencedFormula.match(/SUM\(\$?[A-Z]{1,3}\$?(\d+):\$?[A-Z]{1,3}\$?(\d+)\)/i);
+  if (!match) {
+    return undefined;
+  }
+
+  return {
+    startRow: Number(match[1]),
+    endRow: Number(match[2]),
+  };
+}
+
+function feeTotalColumnFormula(sheet: XLSX.WorkSheet) {
+  const headerRow = findHeaderRow(sheet, REQUIRED_HEADER_MARKERS, HEADER_SCAN_ROWS);
+  if (!headerRow) {
+    return undefined;
+  }
+
+  const columnMap = buildColumnMap(sheet, headerRow);
+  const feeCol = columnMap.Fee;
+  if (feeCol === undefined) {
+    return undefined;
+  }
+
+  const range = XLSX.utils.decode_range(sheet["!ref"] ?? "A1:A1");
+  for (let row = range.e.r + 1; row >= headerRow + 1; row -= 1) {
+    const address = XLSX.utils.encode_cell({ r: row - 1, c: feeCol });
+    const formula = cellFormula(sheet, address);
+    if (formula && /SUM\(/i.test(formula)) {
+      return formula;
+    }
+  }
+
+  return undefined;
+}
+
+function feeReferenceAddress(formula: string, sheetName: string) {
+  const normalized = formula.replace(/\s+/g, "");
+  const match = normalized.match(/-(?:'([^']+)'!)?\$?([A-Z]{1,3})\$?(\d+)$/i);
+  if (!match) {
+    return undefined;
+  }
+
+  const referencedSheet = match[1];
+  if (referencedSheet && referencedSheet !== sheetName) {
+    return undefined;
+  }
+
+  return `${match[2]}${match[3]}`;
 }
 
 function categoryPairs(
@@ -403,6 +880,23 @@ function rowValues(sheet: XLSX.WorkSheet, row: number) {
 
 function cell(sheet: XLSX.WorkSheet, address: string): CellValue {
   return cellValue(sheet, address);
+}
+
+function cellFormula(sheet: XLSX.WorkSheet, address: string) {
+  const worksheetCell = sheet[address];
+  if (!worksheetCell) {
+    return undefined;
+  }
+
+  if (typeof worksheetCell.f === "string" && worksheetCell.f.trim()) {
+    return worksheetCell.f.trim();
+  }
+
+  if (typeof worksheetCell.v === "string" && worksheetCell.v.trim().startsWith("=")) {
+    return worksheetCell.v.trim().slice(1);
+  }
+
+  return undefined;
 }
 
 function cellValue(sheet: XLSX.WorkSheet, address: string): CellValue {
@@ -532,7 +1026,8 @@ function isExpectedHeader(header: string): header is ExpectedHeader {
 }
 
 function normalizeCategoryCode(value: RawRowValue | CellValue) {
-  return stringValue(value).trim().toUpperCase();
+  const normalized = stringValue(value).trim().toUpperCase().replace(/\.+$/, "");
+  return normalized === "" || normalized === "0" || normalized === "-" ? "" : normalized;
 }
 
 function isFullyBlank(row: SheetRow) {
@@ -560,8 +1055,13 @@ function accountNameFrom(value: RawRowValue, fallback: string) {
 
 function nullableTransaction(transaction: NormalizedTransaction) {
   return {
-    ...transaction,
-    month: transaction.month ?? deriveMonth(transaction.transactionDate ?? transaction.clearDate),
+    sourceSheet: transaction.sourceSheet,
+    sourceRow: transaction.sourceRow,
+    accountName: transaction.accountName,
+    grossCents: transaction.grossCents,
+    feeCents: transaction.feeCents,
+    netCents: transaction.netCents,
+    month: transaction.month ?? deriveMonth(transaction.transactionDate ?? transaction.clearDate) ?? null,
     source: transaction.source ?? null,
     checkNumber: transaction.checkNumber ?? null,
     transactionDate: transaction.transactionDate ?? null,
@@ -575,9 +1075,21 @@ function nullableTransaction(transaction: NormalizedTransaction) {
   };
 }
 
-function inferAccountType(sheetName: string) {
+function isDerivedTransaction(transaction: NormalizedTransaction) {
+  return transaction.rawJson?.includes("\"kind\":\"workbook_fee_allocation\"") ?? false;
+}
+
+function inferAccountType(sheetName: string): AccountType {
   const account = knownAccountSheets.find((known) => known.sheetName === sheetName);
   return account?.accountType ?? "bank";
+}
+
+function formatAuditCurrency(cents: number) {
+  const sign = cents < 0 ? "-" : "";
+  return `${sign}$${(Math.abs(cents) / 100).toLocaleString("en-US", {
+    minimumFractionDigits: 2,
+    maximumFractionDigits: 2,
+  })}`;
 }
 
 function errorMessage(error: unknown) {

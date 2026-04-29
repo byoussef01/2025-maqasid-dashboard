@@ -7,9 +7,12 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint",
-    "db:init": "tsx scripts/init-db.ts"
+    "db:init": "tsx scripts/init-db.ts",
+    "reports:rebuild-cache": "tsx scripts/rebuild-reporting-cache.ts"
   },
   "dependencies": {
+    "@clerk/nextjs": "^7.2.8",
+    "@libsql/client": "^0.17.3",
     "@radix-ui/react-select": "^2.2.6",
     "@radix-ui/react-separator": "^1.1.8",
     "@radix-ui/react-slot": "^1.2.4",

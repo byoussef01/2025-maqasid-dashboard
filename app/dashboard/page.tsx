@@ -1,3 +1,5 @@
+import { FilterSubmitButton } from "@/components/filter-submit-button";
+import { GetForm } from "@/components/get-form";
 import Link from "next/link";
 
 import { PageShell } from "@/components/page-shell";
@@ -26,14 +28,15 @@ import type { AccountType, CategoryType } from "@/lib/types/finance";
 
 export const dynamic = "force-dynamic";
 
-const DEFAULT_START_DATE = "2025-09-01";
-const DEFAULT_END_DATE = "2025-12-01";
-const DEFAULT_DATE_FIELD: ReportDateField = "clear_date";
+const DEFAULT_START_DATE = "2025-01-01";
+const DEFAULT_END_DATE = "2025-12-31";
+const DEFAULT_DATE_FIELD: ReportDateField = "workbook_month";
 
 type SearchParams = Promise<{
   startDate?: string;
   endDate?: string;
   dateField?: ReportDateField;
+  includeUncategorized?: string;
 }>;
 
 export default async function DashboardPage({
@@ -45,8 +48,9 @@ export default async function DashboardPage({
   const startDate = params.startDate || DEFAULT_START_DATE;
   const endDate = params.endDate || DEFAULT_END_DATE;
   const dateField = parseDateField(params.dateField);
-  const filters = { startDate, endDate, dateField };
-  const hasData = hasTransactions();
+  const includeUncategorized = parseCheckbox(params.includeUncategorized);
+  const filters = { startDate, endDate, dateField, includeUncategorized };
+  const hasData = await hasTransactions();
 
   if (!hasData) {
     return (
@@ -70,10 +74,12 @@ export default async function DashboardPage({
     );
   }
 
-  const summary = getSummaryReport(filters);
-  const accounts = getByAccountReport(filters);
-  const categories = getByCategoryReport(filters);
-  const recentImports = getRecentImports(5);
+  const [summary, accounts, categories, recentImports] = await Promise.all([
+    getSummaryReport(filters),
+    getByAccountReport(filters),
+    getByCategoryReport(filters),
+    getRecentImports(5),
+  ]);
 
   return (
     <PageShell>
@@ -81,9 +87,6 @@ export default async function DashboardPage({
         <header className="flex flex-col gap-3 md:flex-row md:items-end md:justify-between">
           <div>
             <h1 className="text-2xl font-semibold tracking-normal">Dashboard</h1>
-            <p className="mt-1 text-sm text-muted-foreground">
-              Reporting from {startDate} through the day before {endDate}.
-            </p>
           </div>
           <Button asChild variant="outline">
             <Link href="/import">Import Workbook</Link>
@@ -93,10 +96,9 @@ export default async function DashboardPage({
         <Card>
           <CardHeader>
             <CardTitle>Filters</CardTitle>
-            <CardDescription>Date range is start-inclusive and end-exclusive.</CardDescription>
           </CardHeader>
           <CardContent>
-            <form className="grid gap-3 md:grid-cols-[12rem_12rem_14rem_auto]">
+            <GetForm className="grid gap-3 md:grid-cols-[12rem_12rem_14rem_auto]">
               <label className="flex flex-col gap-2 text-sm font-medium">
                 Start Date
                 <Input name="startDate" type="date" defaultValue={startDate} />
@@ -114,14 +116,34 @@ export default async function DashboardPage({
                 >
                   <option value="clear_date">Clear Date</option>
                   <option value="transaction_date">Transaction Date</option>
+                  <option value="workbook_month">Workbook Month</option>
                 </select>
               </label>
               <div className="flex items-end">
-                <Button type="submit" variant="outline" className="w-full md:w-auto">
-                  Apply
-                </Button>
+                <FilterSubmitButton
+                  idleLabel="Apply"
+                  pendingLabel="Applying..."
+                  className="w-full md:w-auto"
+                />
               </div>
-            </form>
+              <label className="border-input bg-background flex items-start gap-3 rounded-md border p-3 text-sm md:col-span-4">
+                <input
+                  type="checkbox"
+                  name="includeUncategorized"
+                  value="1"
+                  defaultChecked={includeUncategorized}
+                  className="mt-0.5 size-4 rounded border-input"
+                />
+                <span className="flex min-w-0 flex-col gap-1">
+                  <span className="font-medium">Include unknown / unclassified in totals</span>
+                  <span className="text-xs text-muted-foreground">
+                    Workbook-mapped unknown buckets like ? are already reflected in totals.
+                    Check this to also fold in remaining unknown rows that do not have workbook
+                    bucket mappings.
+                  </span>
+                </span>
+              </label>
+            </GetForm>
           </CardContent>
         </Card>
 
@@ -129,17 +151,12 @@ export default async function DashboardPage({
           <StatCard
             label="Total Revenue"
             value={formatCurrency(summary.revenueCents)}
-            detail={`${formatInteger(summary.transactionCount)} transaction(s) in range`}
+            detail={`${formatInteger(summary.transactionCount)} transactions`}
           />
-          <StatCard
-            label="Total Expenditure"
-            value={formatCurrency(summary.expenditureCents)}
-            detail="Positive expenditure amount"
-          />
+          <StatCard label="Total Expenditure" value={formatCurrency(summary.expenditureCents)} />
           <StatCard
             label="Net"
             value={formatCurrency(summary.normalizedNetCents)}
-            detail="Revenue less expenditure"
           />
           <StatCard
             label="Unknown / Unclassified"
@@ -244,7 +261,7 @@ export default async function DashboardPage({
         <Card>
           <CardHeader>
             <CardTitle>Recent Imports</CardTitle>
-            <CardDescription>Most recent workbook imports stored in SQLite.</CardDescription>
+            <CardDescription>Most recent workbook imports available in the shared data store.</CardDescription>
           </CardHeader>
           <CardContent>
             <Table>
@@ -308,5 +325,11 @@ function CategoryLabel({ code, label }: { code?: string | null; label?: string |
 }
 
 function parseDateField(value?: string): ReportDateField {
-  return value === "transaction_date" || value === "clear_date" ? value : DEFAULT_DATE_FIELD;
+  return value === "transaction_date" || value === "clear_date" || value === "workbook_month"
+    ? value
+    : DEFAULT_DATE_FIELD;
+}
+
+function parseCheckbox(value?: string) {
+  return value === "1" || value === "true" || value === "on";
 }

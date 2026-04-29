@@ -1,3 +1,5 @@
+import { FilterSubmitButton } from "@/components/filter-submit-button";
+import { GetForm } from "@/components/get-form";
 import Link from "next/link";
 import type * as React from "react";
 
@@ -70,8 +72,10 @@ export default async function TransactionsPage({
     limit: PAGE_SIZE,
     offset: (page - 1) * PAGE_SIZE,
   };
-  const { rows, total, limit } = getTransactionsPage(filters);
-  const options = getTransactionFilterOptions();
+  const [{ rows, total, limit }, options] = await Promise.all([
+    getTransactionsPage(filters),
+    getTransactionFilterOptions(),
+  ]);
   const totalPages = Math.max(Math.ceil(total / limit), 1);
   const exportHref = `/transactions/export?${toSearchParams(params, { page: undefined }).toString()}`;
 
@@ -82,7 +86,7 @@ export default async function TransactionsPage({
           <div>
             <h1 className="text-2xl font-semibold tracking-normal">Transactions</h1>
             <p className="mt-1 text-sm text-muted-foreground">
-              Server-side search, filtering, sorting, and pagination over normalized SQLite rows.
+              Server-side search, filtering, sorting, and pagination over normalized Turso rows.
             </p>
           </div>
           <Button asChild variant="outline">
@@ -96,7 +100,7 @@ export default async function TransactionsPage({
             <CardDescription>Use the form to narrow the current server-side result set.</CardDescription>
           </CardHeader>
           <CardContent>
-            <form className="grid gap-3 lg:grid-cols-6">
+            <GetForm className="grid gap-3 lg:grid-cols-6">
               <Input
                 name="q"
                 placeholder="Search payee, description, source"
@@ -153,14 +157,12 @@ export default async function TransactionsPage({
                 <option value="asc">Ascending</option>
               </Select>
               <div className="flex gap-2 lg:col-span-4">
-                <Button type="submit" variant="outline">
-                  Apply
-                </Button>
+                <FilterSubmitButton idleLabel="Apply" pendingLabel="Applying..." />
                 <Button asChild variant="ghost">
                   <Link href="/transactions">Reset</Link>
                 </Button>
               </div>
-            </form>
+            </GetForm>
           </CardContent>
         </Card>
 
