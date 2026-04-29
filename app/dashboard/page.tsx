@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { FilterSubmitButton } from "@/components/filter-submit-button";
 import { GetForm } from "@/components/get-form";
 import Link from "next/link";
@@ -74,12 +75,7 @@ export default async function DashboardPage({
     );
   }
 
-  const [summary, accounts, categories, recentImports] = await Promise.all([
-    getSummaryReport(filters),
-    getByAccountReport(filters),
-    getByCategoryReport(filters),
-    getRecentImports(5),
-  ]);
+  const summary = await getSummaryReport(filters);
 
   return (
     <PageShell>
@@ -165,136 +161,181 @@ export default async function DashboardPage({
           />
         </section>
 
-        <section className="grid gap-4 xl:grid-cols-2">
-          <Card>
-            <CardHeader>
-              <CardTitle>By Account</CardTitle>
-              <CardDescription>Revenue, expenditure, and net by source account.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Account</TableHead>
-                    <TableHead>Type</TableHead>
-                    <TableHead className="text-right">Revenue</TableHead>
-                    <TableHead className="text-right">Expenditure</TableHead>
-                    <TableHead className="text-right">Net</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {accounts.length === 0 ? (
-                    <EmptyTableRow colSpan={5} label="No account activity in this date range." />
-                  ) : (
-                    accounts.map((account) => (
-                      <TableRow key={`${account.sourceSheet}-${account.account}`}>
-                        <TableCell className="font-medium">{account.account}</TableCell>
-                        <TableCell>
-                          <AccountTypeBadge accountType={account.accountType} />
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {formatCurrency(account.revenueCents)}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {formatCurrency(account.expenditureCents)}
-                        </TableCell>
-                        <TableCell className="text-right font-medium">
-                          {formatCurrency(account.normalizedNetCents)}
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
+        <Suspense fallback={<DashboardTablesFallback />}>
+          <DashboardTables filters={filters} />
+        </Suspense>
 
-          <Card>
-            <CardHeader>
-              <CardTitle>By Category</CardTitle>
-              <CardDescription>Accounting category totals using category rules.</CardDescription>
-            </CardHeader>
-            <CardContent>
-              <Table>
-                <TableHeader>
-                  <TableRow>
-                    <TableHead>Category</TableHead>
-                    <TableHead>Reporting Type</TableHead>
-                    <TableHead className="text-right">Revenue</TableHead>
-                    <TableHead className="text-right">Expenditure</TableHead>
-                    <TableHead className="text-right">Net</TableHead>
-                  </TableRow>
-                </TableHeader>
-                <TableBody>
-                  {categories.length === 0 ? (
-                    <EmptyTableRow colSpan={5} label="No category activity in this date range." />
-                  ) : (
-                    categories.map((category) => (
-                      <TableRow key={`${category.reportingType}-${category.categoryCode}`}>
-                        <TableCell>
-                          <CategoryLabel
-                            code={category.categoryCode}
-                            label={category.categoryLabel}
-                          />
-                        </TableCell>
-                        <TableCell>
-                          <ReportingTypeBadge reportingType={category.reportingType} />
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {formatCurrency(category.revenueCents)}
-                        </TableCell>
-                        <TableCell className="text-right">
-                          {formatCurrency(category.expenditureCents)}
-                        </TableCell>
-                        <TableCell className="text-right font-medium">
-                          {formatCurrency(category.normalizedNetCents)}
-                        </TableCell>
-                      </TableRow>
-                    ))
-                  )}
-                </TableBody>
-              </Table>
-            </CardContent>
-          </Card>
-        </section>
-
-        <Card>
-          <CardHeader>
-            <CardTitle>Recent Imports</CardTitle>
-            <CardDescription>Most recent workbook imports available in the shared data store.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Filename</TableHead>
-                  <TableHead>Source</TableHead>
-                  <TableHead className="text-right">Rows</TableHead>
-                  <TableHead>Imported At</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {recentImports.length === 0 ? (
-                  <EmptyTableRow colSpan={4} label="No imports have been recorded yet." />
-                ) : (
-                  recentImports.map((item) => (
-                    <TableRow key={item.id}>
-                      <TableCell className="font-medium">{item.fileName}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline">{item.sourceType}</Badge>
-                      </TableCell>
-                      <TableCell className="text-right">{formatInteger(item.rowCount)}</TableCell>
-                      <TableCell>{item.importedAt}</TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </CardContent>
-        </Card>
+        <Suspense fallback={<RecentImportsFallback />}>
+          <RecentImportsSection />
+        </Suspense>
       </div>
     </PageShell>
   );
+}
+
+async function DashboardTables({
+  filters,
+}: {
+  filters: {
+    startDate: string;
+    endDate: string;
+    dateField: ReportDateField;
+    includeUncategorized: boolean;
+  };
+}) {
+  const [accounts, categories] = await Promise.all([
+    getByAccountReport(filters),
+    getByCategoryReport(filters),
+  ]);
+
+  return (
+    <section className="grid gap-4 xl:grid-cols-2">
+      <Card>
+        <CardHeader>
+          <CardTitle>By Account</CardTitle>
+          <CardDescription>Revenue, expenditure, and net by source account.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Account</TableHead>
+                <TableHead>Type</TableHead>
+                <TableHead className="text-right">Revenue</TableHead>
+                <TableHead className="text-right">Expenditure</TableHead>
+                <TableHead className="text-right">Net</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {accounts.length === 0 ? (
+                <EmptyTableRow colSpan={5} label="No account activity in this date range." />
+              ) : (
+                accounts.map((account) => (
+                  <TableRow key={`${account.sourceSheet}-${account.account}`}>
+                    <TableCell className="font-medium">{account.account}</TableCell>
+                    <TableCell>
+                      <AccountTypeBadge accountType={account.accountType} />
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {formatCurrency(account.revenueCents)}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {formatCurrency(account.expenditureCents)}
+                    </TableCell>
+                    <TableCell className="text-right font-medium">
+                      {formatCurrency(account.normalizedNetCents)}
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+
+      <Card>
+        <CardHeader>
+          <CardTitle>By Category</CardTitle>
+          <CardDescription>Accounting category totals using category rules.</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <Table>
+            <TableHeader>
+              <TableRow>
+                <TableHead>Category</TableHead>
+                <TableHead>Reporting Type</TableHead>
+                <TableHead className="text-right">Revenue</TableHead>
+                <TableHead className="text-right">Expenditure</TableHead>
+                <TableHead className="text-right">Net</TableHead>
+              </TableRow>
+            </TableHeader>
+            <TableBody>
+              {categories.length === 0 ? (
+                <EmptyTableRow colSpan={5} label="No category activity in this date range." />
+              ) : (
+                categories.map((category) => (
+                  <TableRow key={`${category.reportingType}-${category.categoryCode}`}>
+                    <TableCell>
+                      <CategoryLabel
+                        code={category.categoryCode}
+                        label={category.categoryLabel}
+                      />
+                    </TableCell>
+                    <TableCell>
+                      <ReportingTypeBadge reportingType={category.reportingType} />
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {formatCurrency(category.revenueCents)}
+                    </TableCell>
+                    <TableCell className="text-right">
+                      {formatCurrency(category.expenditureCents)}
+                    </TableCell>
+                    <TableCell className="text-right font-medium">
+                      {formatCurrency(category.normalizedNetCents)}
+                    </TableCell>
+                  </TableRow>
+                ))
+              )}
+            </TableBody>
+          </Table>
+        </CardContent>
+      </Card>
+    </section>
+  );
+}
+
+async function RecentImportsSection() {
+  const recentImports = await getRecentImports(5);
+
+  return (
+    <Card>
+      <CardHeader>
+        <CardTitle>Recent Imports</CardTitle>
+        <CardDescription>Most recent workbook imports available in the shared data store.</CardDescription>
+      </CardHeader>
+      <CardContent>
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Filename</TableHead>
+              <TableHead>Source</TableHead>
+              <TableHead className="text-right">Rows</TableHead>
+              <TableHead>Imported At</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {recentImports.length === 0 ? (
+              <EmptyTableRow colSpan={4} label="No imports have been recorded yet." />
+            ) : (
+              recentImports.map((item) => (
+                <TableRow key={item.id}>
+                  <TableCell className="font-medium">{item.fileName}</TableCell>
+                  <TableCell>
+                    <Badge variant="outline">{item.sourceType}</Badge>
+                  </TableCell>
+                  <TableCell className="text-right">{formatInteger(item.rowCount)}</TableCell>
+                  <TableCell>{item.importedAt}</TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </CardContent>
+    </Card>
+  );
+}
+
+function DashboardTablesFallback() {
+  return (
+    <section className="grid gap-4 xl:grid-cols-2">
+      <TableCardSkeleton titleWidth="w-28" />
+      <TableCardSkeleton titleWidth="w-32" />
+    </section>
+  );
+}
+
+function RecentImportsFallback() {
+  return <TableCardSkeleton titleWidth="w-36" columns={4} />;
 }
 
 function EmptyTableRow({ colSpan, label }: { colSpan: number; label: string }) {
@@ -304,6 +345,38 @@ function EmptyTableRow({ colSpan, label }: { colSpan: number; label: string }) {
         {label}
       </TableCell>
     </TableRow>
+  );
+}
+
+function TableCardSkeleton({
+  titleWidth,
+  columns = 5,
+}: {
+  titleWidth: string;
+  columns?: number;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <div className={`h-6 animate-pulse rounded-md bg-muted ${titleWidth}`} />
+        <div className="h-4 w-56 animate-pulse rounded-md bg-muted/80" />
+      </CardHeader>
+      <CardContent>
+        <div className="space-y-3">
+          {Array.from({ length: 7 }).map((_, index) => (
+            <div
+              key={index}
+              className="grid gap-3"
+              style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
+            >
+              {Array.from({ length: columns }).map((__, columnIndex) => (
+                <div key={columnIndex} className="h-4 animate-pulse rounded-md bg-muted/80" />
+              ))}
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 

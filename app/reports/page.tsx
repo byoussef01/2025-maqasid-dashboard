@@ -1,3 +1,4 @@
+import { Suspense } from "react";
 import { FilterSubmitButton } from "@/components/filter-submit-button";
 import { GetForm } from "@/components/get-form";
 import Link from "next/link";
@@ -77,14 +78,10 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
     summaryBucketSection: cleanAll(firstParam(params.summaryBucketSection)),
     showEmptyBuckets: parseCheckbox(firstParam(params.showEmptyBuckets)),
   };
-  const [options, summary, accounts, categories, summaryBuckets, bucketSections, exceptions] = await Promise.all([
+  const [options, summary, bucketSections] = await Promise.all([
     getTransactionFilterOptions(),
     getSummaryReport(filters),
-    getByAccountReport(filters),
-    getByCategoryReport(filters),
-    getSummaryBucketReport(filters),
     getSummaryBucketSections(),
-    getExceptionsReport(filters),
   ]);
 
   return (
@@ -191,236 +188,294 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
           />
         </section>
 
-        <ReportCard
-          title="Summary Buckets"
-          description="Grouped rollups for major reporting areas."
-        >
-          <GetForm action="/reports" className="mb-4 flex flex-col gap-3">
-            <input type="hidden" name="startDate" value={filters.startDate} />
-            <input type="hidden" name="endDate" value={filters.endDate} />
-            <input type="hidden" name="dateField" value={filters.dateField} />
-            <input type="hidden" name="account" value={firstParam(params.account) || "all"} />
-            <input
-              type="hidden"
-              name="reportingType"
-              value={firstParam(params.reportingType) || "all"}
-            />
-            {(filters.accountingCategory ?? []).map((value) => (
-              <input key={`bucket-accounting-${value}`} type="hidden" name="accountingCategory" value={value} />
-            ))}
-            {(filters.programCategory ?? []).map((value) => (
-              <input key={`bucket-program-${value}`} type="hidden" name="programCategory" value={value} />
-            ))}
-            {filters.includeUncategorized ? (
-              <input type="hidden" name="includeUncategorized" value="1" />
-            ) : null}
-            <div className="grid gap-3 lg:grid-cols-4">
-              <div className="flex min-w-[14rem] flex-col gap-2">
-                <label className="text-sm font-medium">Bucket Group</label>
-                <Select
-                  name="summaryBucketSection"
-                  defaultValue={filters.summaryBucketSection ?? "all"}
-                >
-                  <option value="all">All groups</option>
-                  {bucketSections.map((section) => (
-                    <option key={section.sectionName} value={section.sectionName}>
-                      {section.sectionName}
-                    </option>
-                  ))}
-                </Select>
-              </div>
-              <div className="flex min-w-[14rem] flex-col gap-2">
-                <label className="text-sm font-medium">Bucket Sort</label>
-                <Select
-                  name="summaryBucketSort"
-                  defaultValue={filters.summaryBucketSort ?? "type"}
-                >
-                  <option value="type">Sort by type</option>
-                  <option value="section">Sort by section</option>
-                  <option value="bucket">Sort by bucket</option>
-                  <option value="transactions">Sort by transactions</option>
-                  <option value="total">Sort by total</option>
-                </Select>
-              </div>
-              <div className="flex min-w-[12rem] flex-col gap-2">
-                <label className="text-sm font-medium">Direction</label>
-                <Select
-                  name="summaryBucketSortDir"
-                  defaultValue={filters.summaryBucketSortDir ?? "asc"}
-                >
-                  <option value="asc">Ascending</option>
-                  <option value="desc">Descending</option>
-                </Select>
-              </div>
-              <div className="flex flex-col gap-2">
-                <label className="text-sm font-medium">Visibility</label>
-                <label className="border-input bg-background flex h-9 items-center gap-2 rounded-md border px-3 text-sm">
-                  <input
-                    type="checkbox"
-                    name="showEmptyBuckets"
-                    value="1"
-                    defaultChecked={filters.showEmptyBuckets}
-                    className="size-4 rounded border-input"
-                  />
-                  <span className="font-medium">Show if empty</span>
-                </label>
-              </div>
-            </div>
-            <div>
-              <FilterSubmitButton
-                idleLabel="Apply Bucket View"
-                pendingLabel="Updating Buckets..."
-                size="sm"
-              />
-            </div>
-          </GetForm>
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Section</TableHead>
-                <TableHead>Bucket</TableHead>
-                <TableHead>Type</TableHead>
-                <TableHead className="text-right">Transactions</TableHead>
-                <TableHead className="text-right">Total</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {summaryBuckets.length === 0 ? (
-                <EmptyRow colSpan={5} />
-              ) : (
-                summaryBuckets.map((row) => (
-                  <TableRow key={`${row.bucketKey}-${row.sourceCell}`}>
-                    <TableCell className="font-medium">{row.sectionName}</TableCell>
-                    <TableCell>{row.bucketName}</TableCell>
-                    <TableCell>
-                      <Badge variant="outline">{row.reportType}</Badge>
-                    </TableCell>
-                    <TableCell className="text-right">{formatInteger(row.transactionCount)}</TableCell>
-                    <TableCell className="text-right font-medium">{formatCurrency(row.totalCents)}</TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </ReportCard>
+        <Suspense fallback={<SummaryBucketsFallback />}>
+          <SummaryBucketsSection filters={filters} params={params} bucketSections={bucketSections} />
+        </Suspense>
 
-        <section className="grid gap-4 xl:grid-cols-2">
-          <ReportCard title="By Account Report" description="Revenue and expenditure by account.">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Account</TableHead>
-                  <TableHead>Account Type</TableHead>
-                  <TableHead className="text-right">Revenue</TableHead>
-                  <TableHead className="text-right">Expenditure</TableHead>
-                  <TableHead className="text-right">Net</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {accounts.length === 0 ? (
-                  <EmptyRow colSpan={5} />
-                ) : (
-                  accounts.map((row) => (
-                    <TableRow key={`${row.sourceSheet}-${row.account}`}>
-                      <TableCell className="font-medium">{row.account}</TableCell>
-                      <TableCell>
-                        <Badge variant="outline">{row.accountType?.replaceAll("_", " ") ?? "other"}</Badge>
-                      </TableCell>
-                      <TableCell className="text-right">{formatCurrency(row.revenueCents)}</TableCell>
-                      <TableCell className="text-right">{formatCurrency(row.expenditureCents)}</TableCell>
-                      <TableCell className="text-right font-medium">
-                        {formatCurrency(row.normalizedNetCents)}
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </ReportCard>
+        <Suspense fallback={<ReportTablesFallback />}>
+          <ReportTablesSection filters={filters} />
+        </Suspense>
 
-          <ReportCard title="By Category Report" description="Revenue and expenditure by accounting category.">
-            <Table>
-              <TableHeader>
-                <TableRow>
-                  <TableHead>Accounting Category</TableHead>
-                  <TableHead>Reporting Type</TableHead>
-                  <TableHead className="text-right">Revenue</TableHead>
-                  <TableHead className="text-right">Expenditure</TableHead>
-                  <TableHead className="text-right">Net</TableHead>
-                </TableRow>
-              </TableHeader>
-              <TableBody>
-                {categories.length === 0 ? (
-                  <EmptyRow colSpan={5} />
-                ) : (
-                  categories.map((row) => (
-                    <TableRow key={`${row.reportingType}-${row.categoryCode}`}>
-                      <TableCell>
-                        <CategoryLabel code={row.categoryCode} label={row.categoryLabel} />
-                      </TableCell>
-                      <TableCell>
-                        <ReportingBadge type={row.reportingType} />
-                      </TableCell>
-                      <TableCell className="text-right">{formatCurrency(row.revenueCents)}</TableCell>
-                      <TableCell className="text-right">{formatCurrency(row.expenditureCents)}</TableCell>
-                      <TableCell className="text-right font-medium">
-                        {formatCurrency(row.normalizedNetCents)}
-                      </TableCell>
-                    </TableRow>
-                  ))
-                )}
-              </TableBody>
-            </Table>
-          </ReportCard>
-        </section>
-
-        <ReportCard title="Exceptions Report" description="Rows that need review before final reporting.">
-          <Table>
-            <TableHeader>
-              <TableRow>
-                <TableHead>Reason</TableHead>
-                <TableHead>Clear Date</TableHead>
-                <TableHead>Trans. Date</TableHead>
-                <TableHead>Account</TableHead>
-                <TableHead>Payee</TableHead>
-                <TableHead className="text-right">Net</TableHead>
-                <TableHead>Accounting Category</TableHead>
-                <TableHead>Reporting Type</TableHead>
-                <TableHead className="text-right">Source Row</TableHead>
-              </TableRow>
-            </TableHeader>
-            <TableBody>
-              {exceptions.length === 0 ? (
-                <EmptyRow colSpan={9} />
-              ) : (
-                exceptions.slice(0, 100).map((row) => (
-                  <TableRow key={row.id}>
-                    <TableCell className="max-w-[18rem] whitespace-normal">{row.reason}</TableCell>
-                    <TableCell>{row.clearDate || "Missing"}</TableCell>
-                    <TableCell>{row.transactionDate || "Missing"}</TableCell>
-                    <TableCell className="font-medium">{row.sourceSheet}</TableCell>
-                    <TableCell className="max-w-[12rem] truncate">{row.payee || "Unlabeled"}</TableCell>
-                    <TableCell className="text-right">{formatCurrency(row.netCents)}</TableCell>
-                    <TableCell>
-                      <CategoryLabel
-                        code={row.accountingCategory}
-                        label={row.accountingCategoryLabel}
-                        fallback="Missing"
-                      />
-                    </TableCell>
-                    <TableCell>
-                      <ReportingBadge type={row.reportingType} />
-                    </TableCell>
-                    <TableCell className="text-right">{row.sourceRow}</TableCell>
-                  </TableRow>
-                ))
-              )}
-            </TableBody>
-          </Table>
-        </ReportCard>
+        <Suspense fallback={<ExceptionsFallback />}>
+          <ExceptionsSection filters={filters} />
+        </Suspense>
       </div>
     </PageShell>
   );
+}
+
+async function SummaryBucketsSection({
+  filters,
+  params,
+  bucketSections,
+}: {
+  filters: ReportFilters;
+  params: Awaited<SearchParams>;
+  bucketSections: { sectionName: string }[];
+}) {
+  const summaryBuckets = await getSummaryBucketReport(filters);
+
+  return (
+    <ReportCard
+      title="Summary Buckets"
+      description="Grouped rollups for major reporting areas."
+    >
+      <GetForm action="/reports" className="mb-4 flex flex-col gap-3">
+        <input type="hidden" name="startDate" value={filters.startDate} />
+        <input type="hidden" name="endDate" value={filters.endDate} />
+        <input type="hidden" name="dateField" value={filters.dateField} />
+        <input type="hidden" name="account" value={firstParam(params.account) || "all"} />
+        <input
+          type="hidden"
+          name="reportingType"
+          value={firstParam(params.reportingType) || "all"}
+        />
+        {(filters.accountingCategory ?? []).map((value) => (
+          <input key={`bucket-accounting-${value}`} type="hidden" name="accountingCategory" value={value} />
+        ))}
+        {(filters.programCategory ?? []).map((value) => (
+          <input key={`bucket-program-${value}`} type="hidden" name="programCategory" value={value} />
+        ))}
+        {filters.includeUncategorized ? (
+          <input type="hidden" name="includeUncategorized" value="1" />
+        ) : null}
+        <div className="grid gap-3 lg:grid-cols-4">
+          <div className="flex min-w-[14rem] flex-col gap-2">
+            <label className="text-sm font-medium">Bucket Group</label>
+            <Select
+              name="summaryBucketSection"
+              defaultValue={filters.summaryBucketSection ?? "all"}
+            >
+              <option value="all">All groups</option>
+              {bucketSections.map((section) => (
+                <option key={section.sectionName} value={section.sectionName}>
+                  {section.sectionName}
+                </option>
+              ))}
+            </Select>
+          </div>
+          <div className="flex min-w-[14rem] flex-col gap-2">
+            <label className="text-sm font-medium">Bucket Sort</label>
+            <Select
+              name="summaryBucketSort"
+              defaultValue={filters.summaryBucketSort ?? "type"}
+            >
+              <option value="type">Sort by type</option>
+              <option value="section">Sort by section</option>
+              <option value="bucket">Sort by bucket</option>
+              <option value="transactions">Sort by transactions</option>
+              <option value="total">Sort by total</option>
+            </Select>
+          </div>
+          <div className="flex min-w-[12rem] flex-col gap-2">
+            <label className="text-sm font-medium">Direction</label>
+            <Select
+              name="summaryBucketSortDir"
+              defaultValue={filters.summaryBucketSortDir ?? "asc"}
+            >
+              <option value="asc">Ascending</option>
+              <option value="desc">Descending</option>
+            </Select>
+          </div>
+          <div className="flex flex-col gap-2">
+            <label className="text-sm font-medium">Visibility</label>
+            <label className="border-input bg-background flex h-9 items-center gap-2 rounded-md border px-3 text-sm">
+              <input
+                type="checkbox"
+                name="showEmptyBuckets"
+                value="1"
+                defaultChecked={filters.showEmptyBuckets}
+                className="size-4 rounded border-input"
+              />
+              <span className="font-medium">Show if empty</span>
+            </label>
+          </div>
+        </div>
+        <div>
+          <FilterSubmitButton
+            idleLabel="Apply Bucket View"
+            pendingLabel="Updating Buckets..."
+            size="sm"
+          />
+        </div>
+      </GetForm>
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Section</TableHead>
+            <TableHead>Bucket</TableHead>
+            <TableHead>Type</TableHead>
+            <TableHead className="text-right">Transactions</TableHead>
+            <TableHead className="text-right">Total</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {summaryBuckets.length === 0 ? (
+            <EmptyRow colSpan={5} />
+          ) : (
+            summaryBuckets.map((row) => (
+              <TableRow key={`${row.bucketKey}-${row.sourceCell}`}>
+                <TableCell className="font-medium">{row.sectionName}</TableCell>
+                <TableCell>{row.bucketName}</TableCell>
+                <TableCell>
+                  <Badge variant="outline">{row.reportType}</Badge>
+                </TableCell>
+                <TableCell className="text-right">{formatInteger(row.transactionCount)}</TableCell>
+                <TableCell className="text-right font-medium">{formatCurrency(row.totalCents)}</TableCell>
+              </TableRow>
+            ))
+          )}
+        </TableBody>
+      </Table>
+    </ReportCard>
+  );
+}
+
+async function ReportTablesSection({ filters }: { filters: ReportFilters }) {
+  const [accounts, categories] = await Promise.all([
+    getByAccountReport(filters),
+    getByCategoryReport(filters),
+  ]);
+
+  return (
+    <section className="grid gap-4 xl:grid-cols-2">
+      <ReportCard title="By Account Report" description="Revenue and expenditure by account.">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Account</TableHead>
+              <TableHead>Account Type</TableHead>
+              <TableHead className="text-right">Revenue</TableHead>
+              <TableHead className="text-right">Expenditure</TableHead>
+              <TableHead className="text-right">Net</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {accounts.length === 0 ? (
+              <EmptyRow colSpan={5} />
+            ) : (
+              accounts.map((row) => (
+                <TableRow key={`${row.sourceSheet}-${row.account}`}>
+                  <TableCell className="font-medium">{row.account}</TableCell>
+                  <TableCell>
+                    <Badge variant="outline">{row.accountType?.replaceAll("_", " ") ?? "other"}</Badge>
+                  </TableCell>
+                  <TableCell className="text-right">{formatCurrency(row.revenueCents)}</TableCell>
+                  <TableCell className="text-right">{formatCurrency(row.expenditureCents)}</TableCell>
+                  <TableCell className="text-right font-medium">
+                    {formatCurrency(row.normalizedNetCents)}
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </ReportCard>
+
+      <ReportCard title="By Category Report" description="Revenue and expenditure by accounting category.">
+        <Table>
+          <TableHeader>
+            <TableRow>
+              <TableHead>Accounting Category</TableHead>
+              <TableHead>Reporting Type</TableHead>
+              <TableHead className="text-right">Revenue</TableHead>
+              <TableHead className="text-right">Expenditure</TableHead>
+              <TableHead className="text-right">Net</TableHead>
+            </TableRow>
+          </TableHeader>
+          <TableBody>
+            {categories.length === 0 ? (
+              <EmptyRow colSpan={5} />
+            ) : (
+              categories.map((row) => (
+                <TableRow key={`${row.reportingType}-${row.categoryCode}`}>
+                  <TableCell>
+                    <CategoryLabel code={row.categoryCode} label={row.categoryLabel} />
+                  </TableCell>
+                  <TableCell>
+                    <ReportingBadge type={row.reportingType} />
+                  </TableCell>
+                  <TableCell className="text-right">{formatCurrency(row.revenueCents)}</TableCell>
+                  <TableCell className="text-right">{formatCurrency(row.expenditureCents)}</TableCell>
+                  <TableCell className="text-right font-medium">
+                    {formatCurrency(row.normalizedNetCents)}
+                  </TableCell>
+                </TableRow>
+              ))
+            )}
+          </TableBody>
+        </Table>
+      </ReportCard>
+    </section>
+  );
+}
+
+async function ExceptionsSection({ filters }: { filters: ReportFilters }) {
+  const exceptions = await getExceptionsReport(filters);
+
+  return (
+    <ReportCard title="Exceptions Report" description="Rows that need review before final reporting.">
+      <Table>
+        <TableHeader>
+          <TableRow>
+            <TableHead>Reason</TableHead>
+            <TableHead>Clear Date</TableHead>
+            <TableHead>Trans. Date</TableHead>
+            <TableHead>Account</TableHead>
+            <TableHead>Payee</TableHead>
+            <TableHead className="text-right">Net</TableHead>
+            <TableHead>Accounting Category</TableHead>
+            <TableHead>Reporting Type</TableHead>
+            <TableHead className="text-right">Source Row</TableHead>
+          </TableRow>
+        </TableHeader>
+        <TableBody>
+          {exceptions.length === 0 ? (
+            <EmptyRow colSpan={9} />
+          ) : (
+            exceptions.slice(0, 100).map((row) => (
+              <TableRow key={row.id}>
+                <TableCell className="max-w-[18rem] whitespace-normal">{row.reason}</TableCell>
+                <TableCell>{row.clearDate || "Missing"}</TableCell>
+                <TableCell>{row.transactionDate || "Missing"}</TableCell>
+                <TableCell className="font-medium">{row.sourceSheet}</TableCell>
+                <TableCell className="max-w-[12rem] truncate">{row.payee || "Unlabeled"}</TableCell>
+                <TableCell className="text-right">{formatCurrency(row.netCents)}</TableCell>
+                <TableCell>
+                  <CategoryLabel
+                    code={row.accountingCategory}
+                    label={row.accountingCategoryLabel}
+                    fallback="Missing"
+                  />
+                </TableCell>
+                <TableCell>
+                  <ReportingBadge type={row.reportingType} />
+                </TableCell>
+                <TableCell className="text-right">{row.sourceRow}</TableCell>
+              </TableRow>
+            ))
+          )}
+        </TableBody>
+      </Table>
+    </ReportCard>
+  );
+}
+
+function SummaryBucketsFallback() {
+  return <ReportCardSkeleton titleWidth="w-40" rows={8} columns={5} />;
+}
+
+function ReportTablesFallback() {
+  return (
+    <section className="grid gap-4 xl:grid-cols-2">
+      <ReportCardSkeleton titleWidth="w-32" rows={7} columns={5} />
+      <ReportCardSkeleton titleWidth="w-36" rows={7} columns={5} />
+    </section>
+  );
+}
+
+function ExceptionsFallback() {
+  return <ReportCardSkeleton titleWidth="w-40" rows={8} columns={9} />;
 }
 
 function ExportButton({
@@ -466,6 +521,40 @@ function EmptyRow({ colSpan }: { colSpan: number }) {
         No rows match the selected filters.
       </TableCell>
     </TableRow>
+  );
+}
+
+function ReportCardSkeleton({
+  titleWidth,
+  rows,
+  columns,
+}: {
+  titleWidth: string;
+  rows: number;
+  columns: number;
+}) {
+  return (
+    <Card>
+      <CardHeader>
+        <div className={`h-6 animate-pulse rounded-md bg-muted ${titleWidth}`} />
+        <div className="h-4 w-56 animate-pulse rounded-md bg-muted/80" />
+      </CardHeader>
+      <CardContent>
+        <div className="space-y-3">
+          {Array.from({ length: rows }).map((_, rowIndex) => (
+            <div
+              key={rowIndex}
+              className="grid gap-3"
+              style={{ gridTemplateColumns: `repeat(${columns}, minmax(0, 1fr))` }}
+            >
+              {Array.from({ length: columns }).map((__, columnIndex) => (
+                <div key={columnIndex} className="h-4 animate-pulse rounded-md bg-muted/80" />
+              ))}
+            </div>
+          ))}
+        </div>
+      </CardContent>
+    </Card>
   );
 }
 
