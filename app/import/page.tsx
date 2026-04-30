@@ -35,7 +35,7 @@ export default async function ImportPage() {
         <Card>
           <CardHeader>
             <CardTitle>Import strategy</CardTitle>
-            <CardDescription>Current assumptions based on the 2025 workbook shell.</CardDescription>
+            <CardDescription>Current assumptions used to normalize the workbook.</CardDescription>
           </CardHeader>
           <CardContent className="flex flex-col gap-4 text-sm text-muted-foreground">
             <p>

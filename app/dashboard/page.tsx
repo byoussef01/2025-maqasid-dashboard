@@ -1,5 +1,6 @@
 import { Suspense } from "react";
 import { FilterSubmitButton } from "@/components/filter-submit-button";
+import { FilterCard } from "@/components/filter-card";
 import { GetForm } from "@/components/get-form";
 import Link from "next/link";
 
@@ -84,17 +85,13 @@ export default async function DashboardPage({
           <div>
             <h1 className="text-2xl font-semibold tracking-normal">Dashboard</h1>
           </div>
-          <Button asChild variant="outline">
+          <Button asChild variant="outline" className="w-full sm:w-auto">
             <Link href="/import">Import Workbook</Link>
           </Button>
         </header>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Filters</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <GetForm className="grid gap-3 md:grid-cols-[12rem_12rem_14rem_auto]">
+        <FilterCard>
+            <GetForm className="grid gap-3 sm:grid-cols-2 lg:grid-cols-[12rem_12rem_14rem_auto]">
               <label className="flex flex-col gap-2 text-sm font-medium">
                 Start Date
                 <Input name="startDate" type="date" defaultValue={startDate} />
@@ -122,7 +119,7 @@ export default async function DashboardPage({
                   className="w-full md:w-auto"
                 />
               </div>
-              <label className="border-input bg-background flex items-start gap-3 rounded-md border p-3 text-sm md:col-span-4">
+              <label className="border-input bg-background flex items-start gap-3 rounded-md border p-3 text-sm sm:col-span-2 lg:col-span-4">
                 <input
                   type="checkbox"
                   name="includeUncategorized"
@@ -140,10 +137,9 @@ export default async function DashboardPage({
                 </span>
               </label>
             </GetForm>
-          </CardContent>
-        </Card>
+        </FilterCard>
 
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <StatCard
             label="Total Revenue"
             value={formatCurrency(summary.revenueCents)}
@@ -190,13 +186,13 @@ async function DashboardTables({
 
   return (
     <section className="grid gap-4 xl:grid-cols-2">
-      <Card>
+      <Card className="min-w-0 overflow-hidden">
         <CardHeader>
           <CardTitle>By Account</CardTitle>
           <CardDescription>Revenue, expenditure, and net by source account.</CardDescription>
         </CardHeader>
         <CardContent>
-          <Table>
+          <Table className="min-w-[40rem]">
             <TableHeader>
               <TableRow>
                 <TableHead>Account</TableHead>
@@ -233,13 +229,13 @@ async function DashboardTables({
         </CardContent>
       </Card>
 
-      <Card>
+      <Card className="min-w-0 overflow-hidden">
         <CardHeader>
           <CardTitle>By Category</CardTitle>
           <CardDescription>Accounting category totals using category rules.</CardDescription>
         </CardHeader>
         <CardContent>
-          <Table>
+          <Table className="min-w-[42rem]">
             <TableHeader>
               <TableRow>
                 <TableHead>Category</TableHead>
@@ -288,13 +284,13 @@ async function RecentImportsSection() {
   const recentImports = await getRecentImports(5);
 
   return (
-    <Card>
+    <Card className="min-w-0 overflow-hidden">
       <CardHeader>
         <CardTitle>Recent Imports</CardTitle>
         <CardDescription>Most recent workbook imports available in the shared data store.</CardDescription>
       </CardHeader>
       <CardContent>
-        <Table>
+        <Table className="min-w-[34rem]">
           <TableHeader>
             <TableRow>
               <TableHead>Filename</TableHead>
@@ -309,7 +305,9 @@ async function RecentImportsSection() {
             ) : (
               recentImports.map((item) => (
                 <TableRow key={item.id}>
-                  <TableCell className="font-medium">{item.fileName}</TableCell>
+                  <TableCell className="max-w-[16rem] whitespace-normal font-medium">
+                    {item.fileName}
+                  </TableCell>
                   <TableCell>
                     <Badge variant="outline">{item.sourceType}</Badge>
                   </TableCell>

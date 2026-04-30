@@ -1,5 +1,7 @@
 import { Suspense } from "react";
+import { CollapsibleCard } from "@/components/collapsible-card";
 import { FilterSubmitButton } from "@/components/filter-submit-button";
+import { FilterCard } from "@/components/filter-card";
 import { GetForm } from "@/components/get-form";
 import Link from "next/link";
 import type * as React from "react";
@@ -8,7 +10,7 @@ import { PageShell } from "@/components/page-shell";
 import { StatCard } from "@/components/stat-card";
 import { Badge } from "@/components/ui/badge";
 import { Button } from "@/components/ui/button";
-import { Card, CardContent, CardDescription, CardHeader, CardTitle } from "@/components/ui/card";
+import { Card, CardContent, CardHeader } from "@/components/ui/card";
 import { Input } from "@/components/ui/input";
 import {
   Table,
@@ -101,12 +103,8 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
           </div>
         </header>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Filters</CardTitle>
-          </CardHeader>
-          <CardContent>
-            <GetForm className="grid gap-3 lg:grid-cols-6">
+        <FilterCard>
+            <GetForm className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
               <Input name="startDate" type="date" defaultValue={filters.startDate} />
               <Input name="endDate" type="date" defaultValue={filters.endDate} />
               <Select name="dateField" defaultValue={filters.dateField}>
@@ -163,17 +161,16 @@ export default async function ReportsPage({ searchParams }: { searchParams: Sear
                   </span>
                 </span>
               </label>
-              <div className="flex gap-2 lg:col-span-6">
+              <div className="flex flex-col gap-2 sm:flex-row xl:col-span-6">
                 <FilterSubmitButton idleLabel="Apply" pendingLabel="Applying..." />
                 <Button asChild variant="ghost">
                   <Link href="/reports">Reset</Link>
                 </Button>
               </div>
             </GetForm>
-          </CardContent>
-        </Card>
+        </FilterCard>
 
-        <section className="grid gap-4 md:grid-cols-2 xl:grid-cols-4">
+        <section className="grid gap-4 sm:grid-cols-2 xl:grid-cols-4">
           <StatCard
             label="Total Revenue"
             value={formatCurrency(summary.revenueCents)}
@@ -239,8 +236,8 @@ async function SummaryBucketsSection({
         {filters.includeUncategorized ? (
           <input type="hidden" name="includeUncategorized" value="1" />
         ) : null}
-        <div className="grid gap-3 lg:grid-cols-4">
-          <div className="flex min-w-[14rem] flex-col gap-2">
+        <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-4">
+          <div className="flex min-w-0 flex-col gap-2">
             <label className="text-sm font-medium">Bucket Group</label>
             <Select
               name="summaryBucketSection"
@@ -254,7 +251,7 @@ async function SummaryBucketsSection({
               ))}
             </Select>
           </div>
-          <div className="flex min-w-[14rem] flex-col gap-2">
+          <div className="flex min-w-0 flex-col gap-2">
             <label className="text-sm font-medium">Bucket Sort</label>
             <Select
               name="summaryBucketSort"
@@ -267,7 +264,7 @@ async function SummaryBucketsSection({
               <option value="total">Sort by total</option>
             </Select>
           </div>
-          <div className="flex min-w-[12rem] flex-col gap-2">
+          <div className="flex min-w-0 flex-col gap-2">
             <label className="text-sm font-medium">Direction</label>
             <Select
               name="summaryBucketSortDir"
@@ -299,7 +296,7 @@ async function SummaryBucketsSection({
           />
         </div>
       </GetForm>
-      <Table>
+      <Table className="min-w-[42rem]">
         <TableHeader>
           <TableRow>
             <TableHead>Section</TableHead>
@@ -340,7 +337,7 @@ async function ReportTablesSection({ filters }: { filters: ReportFilters }) {
   return (
     <section className="grid gap-4 xl:grid-cols-2">
       <ReportCard title="By Account Report" description="Revenue and expenditure by account.">
-        <Table>
+        <Table className="min-w-[40rem]">
           <TableHeader>
             <TableRow>
               <TableHead>Account</TableHead>
@@ -373,7 +370,7 @@ async function ReportTablesSection({ filters }: { filters: ReportFilters }) {
       </ReportCard>
 
       <ReportCard title="By Category Report" description="Revenue and expenditure by accounting category.">
-        <Table>
+        <Table className="min-w-[44rem]">
           <TableHeader>
             <TableRow>
               <TableHead>Accounting Category</TableHead>
@@ -415,7 +412,7 @@ async function ExceptionsSection({ filters }: { filters: ReportFilters }) {
 
   return (
     <ReportCard title="Exceptions Report" description="Rows that need review before final reporting.">
-      <Table>
+      <Table className="min-w-[64rem]">
         <TableHeader>
           <TableRow>
             <TableHead>Reason</TableHead>
@@ -504,13 +501,9 @@ function ReportCard({
   children: React.ReactNode;
 }) {
   return (
-    <Card>
-      <CardHeader>
-        <CardTitle>{title}</CardTitle>
-        <CardDescription>{description}</CardDescription>
-      </CardHeader>
-      <CardContent>{children}</CardContent>
-    </Card>
+    <CollapsibleCard title={title} description={description}>
+      {children}
+    </CollapsibleCard>
   );
 }
 

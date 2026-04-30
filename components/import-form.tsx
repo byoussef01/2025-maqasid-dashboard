@@ -32,7 +32,7 @@ export function ImportForm() {
         </label>
         <Input id="workbook" name="workbook" type="file" accept=".xlsx" />
       </div>
-      <div className="flex items-center gap-3">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center">
         <Button type="submit" disabled={isPending}>
           <UploadIcon data-icon="inline-start" />
           {isPending ? "Importing..." : "Import Workbook"}
@@ -72,7 +72,7 @@ function ImportResult({ state }: { state: ImportState }) {
         <>
           <SummaryAudit result={state.result} />
           <div className="mt-4 overflow-x-auto">
-            <table className="w-full text-sm">
+            <table className="min-w-[28rem] text-sm sm:w-full">
               <thead>
                 <tr className="border-b text-left">
                   <th className="py-2 font-medium">Sheet</th>

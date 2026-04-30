@@ -1,4 +1,5 @@
 import { FilterSubmitButton } from "@/components/filter-submit-button";
+import { FilterCard } from "@/components/filter-card";
 import { GetForm } from "@/components/get-form";
 import Link from "next/link";
 import type * as React from "react";
@@ -89,18 +90,13 @@ export default async function TransactionsPage({
               Server-side search, filtering, sorting, and pagination over normalized Turso rows.
             </p>
           </div>
-          <Button asChild variant="outline">
+          <Button asChild variant="outline" className="w-full sm:w-auto">
             <Link href={exportHref}>Export current view to CSV</Link>
           </Button>
         </header>
 
-        <Card>
-          <CardHeader>
-            <CardTitle>Filters</CardTitle>
-            <CardDescription>Use the form to narrow the current server-side result set.</CardDescription>
-          </CardHeader>
-          <CardContent>
-            <GetForm className="grid gap-3 lg:grid-cols-6">
+        <FilterCard>
+            <GetForm className="grid gap-3 sm:grid-cols-2 xl:grid-cols-6">
               <Input
                 name="q"
                 placeholder="Search payee, description, source"
@@ -156,18 +152,17 @@ export default async function TransactionsPage({
                 <option value="desc">Descending</option>
                 <option value="asc">Ascending</option>
               </Select>
-              <div className="flex gap-2 lg:col-span-4">
+              <div className="flex flex-col gap-2 sm:flex-row xl:col-span-4">
                 <FilterSubmitButton idleLabel="Apply" pendingLabel="Applying..." />
                 <Button asChild variant="ghost">
                   <Link href="/transactions">Reset</Link>
                 </Button>
               </div>
             </GetForm>
-          </CardContent>
-        </Card>
+        </FilterCard>
 
-        <Card>
-          <CardHeader className="md:flex md:flex-row md:items-center md:justify-between">
+        <Card className="min-w-0 overflow-hidden">
+          <CardHeader className="gap-3 md:flex md:flex-row md:items-center md:justify-between">
             <div>
               <CardTitle>Normalized Transactions</CardTitle>
               <CardDescription>
@@ -177,7 +172,7 @@ export default async function TransactionsPage({
             <Pagination page={page} totalPages={totalPages} params={params} />
           </CardHeader>
           <CardContent>
-            <Table>
+            <Table className="min-w-[78rem]">
               <TableHeader>
                 <TableRow>
                   <TableHead>Clear Date</TableHead>
@@ -205,10 +200,10 @@ export default async function TransactionsPage({
                       <TableCell>{formatDate(transaction.clearDate)}</TableCell>
                       <TableCell>{formatDate(transaction.transactionDate)}</TableCell>
                       <TableCell className="font-medium">{transaction.sourceSheet}</TableCell>
-                      <TableCell className="max-w-[12rem] truncate">
+                      <TableCell className="max-w-[12rem] whitespace-normal">
                         {transaction.payee || "Unlabeled"}
                       </TableCell>
-                      <TableCell className="max-w-[18rem] truncate">
+                      <TableCell className="max-w-[18rem] whitespace-normal">
                         {transaction.description || transaction.source || ""}
                       </TableCell>
                       <TableCell className="text-right font-medium">
@@ -254,7 +249,7 @@ function Pagination({
   params: Awaited<SearchParams>;
 }) {
   return (
-    <div className="mt-3 flex gap-2 md:mt-0">
+    <div className="mt-3 flex flex-wrap gap-2 md:mt-0">
       <Button asChild variant="outline" size="sm" aria-disabled={page <= 1}>
         <Link
           href={`/transactions?${toSearchParams(params, { page: String(Math.max(page - 1, 1)) })}`}
