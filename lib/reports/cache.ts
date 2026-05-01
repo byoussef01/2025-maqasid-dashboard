@@ -52,8 +52,20 @@ CREATE INDEX IF NOT EXISTS idx_reporting_transactions_workbook_month_date
   ON reporting_transactions(workbook_month_date);
 CREATE INDEX IF NOT EXISTS idx_reporting_transactions_source_sheet
   ON reporting_transactions(source_sheet);
+CREATE INDEX IF NOT EXISTS idx_reporting_transactions_source_sheet_clear_date
+  ON reporting_transactions(source_sheet, clear_date);
+CREATE INDEX IF NOT EXISTS idx_reporting_transactions_source_sheet_transaction_date
+  ON reporting_transactions(source_sheet, transaction_date);
+CREATE INDEX IF NOT EXISTS idx_reporting_transactions_source_sheet_workbook_month_date
+  ON reporting_transactions(source_sheet, workbook_month_date);
 CREATE INDEX IF NOT EXISTS idx_reporting_transactions_reporting_type
   ON reporting_transactions(reporting_type);
+CREATE INDEX IF NOT EXISTS idx_reporting_transactions_reporting_type_clear_date
+  ON reporting_transactions(reporting_type, clear_date);
+CREATE INDEX IF NOT EXISTS idx_reporting_transactions_reporting_type_transaction_date
+  ON reporting_transactions(reporting_type, transaction_date);
+CREATE INDEX IF NOT EXISTS idx_reporting_transactions_reporting_type_workbook_month_date
+  ON reporting_transactions(reporting_type, workbook_month_date);
 CREATE INDEX IF NOT EXISTS idx_reporting_transactions_accounting_category
   ON reporting_transactions(accounting_category);
 CREATE INDEX IF NOT EXISTS idx_reporting_transactions_program_category
@@ -75,6 +87,12 @@ CREATE TABLE IF NOT EXISTS reporting_bucket_entries (
 
 CREATE INDEX IF NOT EXISTS idx_reporting_bucket_entries_bucket_key
   ON reporting_bucket_entries(bucket_key);
+CREATE INDEX IF NOT EXISTS idx_reporting_bucket_entries_bucket_key_clear_date
+  ON reporting_bucket_entries(bucket_key, clear_date);
+CREATE INDEX IF NOT EXISTS idx_reporting_bucket_entries_bucket_key_transaction_date
+  ON reporting_bucket_entries(bucket_key, transaction_date);
+CREATE INDEX IF NOT EXISTS idx_reporting_bucket_entries_bucket_key_workbook_month_date
+  ON reporting_bucket_entries(bucket_key, workbook_month_date);
 CREATE INDEX IF NOT EXISTS idx_reporting_bucket_entries_clear_date
   ON reporting_bucket_entries(clear_date);
 CREATE INDEX IF NOT EXISTS idx_reporting_bucket_entries_transaction_date

@@ -150,9 +150,9 @@ export async function getByAccountReport(filters: ReportFilters = {}) {
     unknownCents: number;
   }>(
       `SELECT
-        account,
-        source_sheet as sourceSheet,
-        account_type as accountType,
+        reporting_transactions.source_sheet as account,
+        reporting_transactions.source_sheet as sourceSheet,
+        reporting_transactions.account_type as accountType,
         COUNT(*) as transactionCount,
         COALESCE(SUM(${metrics.revenueExpr}), 0) as revenueCents,
         COALESCE(SUM(${metrics.expenditureExpr}), 0) as expenditureCents,
@@ -160,7 +160,7 @@ export async function getByAccountReport(filters: ReportFilters = {}) {
         COALESCE(SUM(CASE WHEN reporting_type = 'unknown' THEN ABS(report_amount_cents) ELSE 0 END), 0) as unknownCents
        FROM reporting_transactions
        ${whereSql}
-       GROUP BY account, source_sheet, account_type
+       GROUP BY reporting_transactions.source_sheet, reporting_transactions.account_type
        ORDER BY ABS(normalizedNetCents) DESC, account ASC`,
       params,
     );
